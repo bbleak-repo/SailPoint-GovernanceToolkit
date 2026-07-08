@@ -606,12 +606,15 @@ $v3CrossPending  = @()
 function Get-V3Prop { param($o, [string]$n, $def = '')
     return (Get-SPObjectProperty -Object $o -Name $n -Default $def)
 }
-# Stable scope key, identical to Build-SPCampaignSnapshotData (prefers immutable IDs).
+# Stable scope key, identical to Get-SPStableScopeKey (SP.CampaignDelta): the access NAME
+# wins over the churn-prone AccessId so reviewer reassignment does not fabricate net-new items.
 function Get-V3Key { param($o)
-    $iid = [string](Get-V3Prop $o 'IdentityId' '')
-    $aid = [string](Get-V3Prop $o 'AccessId' ''); if ([string]::IsNullOrWhiteSpace($aid)) { $aid = [string](Get-V3Prop $o 'AccessName' '') }
-    $sid = [string](Get-V3Prop $o 'SourceId' ''); if ([string]::IsNullOrWhiteSpace($sid)) { $sid = [string](Get-V3Prop $o 'SourceName' '') }
-    return ('{0}|{1}|{2}' -f $iid, $aid, $sid)
+    return (Get-SPStableScopeKey `
+        -IdentityId ([string](Get-V3Prop $o 'IdentityId' '')) `
+        -AccessName ([string](Get-V3Prop $o 'AccessName' '')) `
+        -AccessId   ([string](Get-V3Prop $o 'AccessId' '')) `
+        -SourceId   ([string](Get-V3Prop $o 'SourceId' '')) `
+        -SourceName ([string](Get-V3Prop $o 'SourceName' '')))
 }
 
 try {
@@ -695,7 +698,10 @@ try {
             $seen = @{}
             foreach ($it in @($snap.Items)) {
                 if ([string](Get-V3Prop $it 'Decision' '') -ne 'PENDING') { continue }
-                $k = [string](Get-V3Prop $it 'Key' '')
+                # Recompute the stable key (older snapshots persist AccessId-first keys
+                # that churn on reassignment); fall back to the stored Key if fields absent.
+                $k = Get-V3Key $it
+                if ([string]::IsNullOrWhiteSpace($k)) { $k = [string](Get-V3Prop $it 'Key' '') }
                 if ([string]::IsNullOrWhiteSpace($k) -or $seen.ContainsKey($k)) { continue }
                 $seen[$k] = $true
                 if (-not $pendCount.ContainsKey($k)) { $pendCount[$k] = 0; $pendInfo[$k] = $it }
@@ -1671,7 +1677,10 @@ else {
 # v2 columns (Account, Justification, source-aware Remediation) the lean snapshot items lack.
 $v3NetNewItems = [System.Collections.Generic.List[object]]::new()
 foreach ($a in $v3Added) {
-    $k = [string](Get-V3Prop $a 'Key' '')
+    # Recompute the stable key so the join to $v3KeyToDecision (built with Get-V3Key)
+    # matches; the item's persisted Key may be the old AccessId-first format.
+    $k = Get-V3Key $a
+    if ([string]::IsNullOrWhiteSpace($k)) { $k = [string](Get-V3Prop $a 'Key' '') }
     $full = if ($k -and $v3KeyToDecision.ContainsKey($k)) { $v3KeyToDecision[$k] } else { $a }
     $v3NetNewItems.Add($full)
 }

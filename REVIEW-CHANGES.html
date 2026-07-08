@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Code Review Remediation — SailPoint Governance Toolkit — 2026-07-07</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;background:#ffffff;max-width:1100px;margin-left:auto;margin-right:auto;padding:0 16px;}
+h1{font-size:22px;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:6px;margin-bottom:4px;}
+h2{font-size:16px;color:#1f3a5f;margin-top:32px;border-bottom:1px solid #d4dce6;padding-bottom:4px;}
+h3{font-size:14px;color:#1f3a5f;margin-top:20px;margin-bottom:6px;}
+.meta{color:#566;font-size:12px;margin-bottom:14px;}
+table{border-collapse:collapse;width:100%;margin-top:8px;font-size:12px;}
+th{background:#1f3a5f;color:#fff;text-align:left;padding:6px 8px;font-weight:600;}
+td{border-bottom:1px solid #e3e9f0;padding:5px 8px;vertical-align:top;}
+tr:nth-child(even) td{background:#f6f9fc;}
+.kpi{display:inline-block;min-width:120px;margin:6px 10px 6px 0;padding:10px 14px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;}
+.kpi .n{font-size:22px;font-weight:700;color:#1f3a5f;display:block;}
+.kpi .l{font-size:11px;color:#566;text-transform:uppercase;letter-spacing:.04em;}
+.note{font-size:11px;color:#777;margin-top:4px;}
+.sev-critical{color:#b00020;font-weight:700;}
+.sev-high{color:#b00020;}
+.sev-medium{color:#9a6700;}
+.sev-low{color:#777;}
+code{background:#f0f3f7;border:1px solid #e0e6ee;border-radius:3px;padding:1px 4px;font-family:Consolas,'Courier New',monospace;font-size:12px;}
+pre{background:#f6f9fc;border:1px solid #d4dce6;border-radius:6px;padding:10px 12px;overflow-x:auto;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.45;}
+pre.before{border-left:4px solid #b00020;}
+pre.after{border-left:4px solid #0a7d2c;}
+.lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-top:10px;}
+.lbl.b{color:#b00020;}
+.lbl.a{color:#0a7d2c;}
+.commit{font-family:Consolas,monospace;font-size:12px;background:#eef2f7;border-radius:3px;padding:1px 6px;color:#1f3a5f;}
+.verified{display:inline-block;background:#e7f5eb;color:#0a7d2c;border:1px solid #bfe3ca;border-radius:3px;font-size:11px;font-weight:600;padding:1px 6px;margin-left:6px;}
+.impact{background:#fff7e6;border:1px solid #f0e0b8;border-radius:6px;padding:8px 12px;font-size:12.5px;margin:8px 0;}
+ul{font-size:13px;} li{margin-bottom:4px;}
+p{font-size:13px;line-height:1.55;}
+a{color:#336699;}
+.toc{background:#f6f9fc;border:1px solid #d4dce6;border-radius:6px;padding:12px 18px;font-size:13px;}
+.toc ol{margin:6px 0 2px 0;padding-left:22px;} .toc li{margin-bottom:3px;}
+</style>
+</head>
+<body>
+
+<h1>Code Review Remediation Report</h1>
+<div class="meta">
+SailPoint ISC Governance Toolkit &nbsp;|&nbsp; Branch: <code>fix/review-findings</code> (base: <code>master @ 558e908</code>) &nbsp;|&nbsp; Date: 2026-07-07<br>
+Companion document: <code>REVIEW-FINDINGS.md</code> (full 35-finding review); this file documents the <strong>changes applied</strong>.
+</div>
+
+<div>
+<span class="kpi"><span class="n">49</span><span class="l">Findings catalogued</span></span>
+<span class="kpi"><span class="n">40</span><span class="l">Findings fixed</span></span>
+<span class="kpi"><span class="n">19</span><span class="l">Fix commits</span></span>
+<span class="kpi"><span class="n">20</span><span class="l">Files changed</span></span>
+</div>
+<p class="note">Three remediation rounds on 2026-07-07: Round 1 (sections 1&ndash;7) fixed all critical/high items;
+Round 2 (section 8) fixed the remaining confirmed-defect mediums plus most lows; Round 3 (section 9) delivered the
+reassignment-stable scope key and the four user-decided semantics changes. Nine lower-risk findings remain open
+with reasons (<a href="#remaining">Remaining</a>).</p>
+
+<h2>How the review was performed</h2>
+<p>
+The full codebase (251 PowerShell files, ~137k lines) was reviewed with focus on <strong>logic, reporting accuracy, and cache correctness</strong>.
+The cache layer (<code>SP.CacheService</code>, <code>SP.IdentityService</code>, auth/config caches) was read end-to-end by hand; four parallel review passes covered
+<code>SP.AuditQueries</code> (8.2k lines), the report core + HTML generators (15.5k lines), the daily-evidence scripts (V4c&ndash;V7 + orchestrator), and the API/auth/diff modules.
+<strong>Every finding was re-verified against source before being accepted</strong>, and the highest-impact claims were reproduced empirically under Windows PowerShell 5.1.
+Each fix below states how it was verified.
+</p>
+
+<div class="toc">
+<strong>Changes in this report</strong>
+<ol>
+<li><a href="#c1">API: duplicate <code>/v3</code> version segment 404s (+ <code>Test-SPConfiguration</code> repair)</a></li>
+<li><a href="#c2">Reports: <code>ConvertTo-SPHtmlSafe [string]$x</code> argument-mode corruption</a></li>
+<li><a href="#c3">Evidence V5: crash on every run with data (use before assignment)</a></li>
+<li><a href="#c4">Reports: per-campaign files silently overwriting each other</a></li>
+<li><a href="#c5">Cache: <code>-RefreshCache</code> never refreshed; stale meta poisoned provenance</a></li>
+<li><a href="#c6">Auth: dead tenant-isolation guard; JWT base64url decode</a></li>
+<li><a href="#c7">Quick wins: rubber-stamp CSV columns, JSON Patch, identity failure TTL, empty-file writes</a></li>
+<li><a href="#c8">Round 2: twenty further fixes (evidence scripts, remediation counting, orchestrator, cache, API, scraper)</a></li>
+<li><a href="#c9">Round 3: reassignment-stable scope key + four user-decided semantics changes</a></li>
+<li><a href="#remaining">Remaining findings (not yet fixed)</a></li>
+</ol>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="c1">1. API: duplicate <code>/v3</code> version segment &mdash; ~10 exported functions always 404</h2>
+<p><span class="sev-critical">CRITICAL</span> &nbsp; Commit <span class="commit">dbb6066</span> &nbsp; Files: <code>Modules\SP.Api\SP.ApiClient.psm1</code>, <code>Modules\SP.Core\SP.Config.psm1</code></p>
+
+<div class="impact"><strong>Impact before the fix:</strong> <code>Api.BaseUrl</code> is configured <em>with</em> the version segment
+(<code>https://tenant.api.identitynow.com/v3</code>) and the client concatenated endpoints verbatim &mdash; but 14 call sites passed endpoints that
+also began with <code>/v3/</code>. The resulting <code>/v3/v3/&hellip;</code> URLs 404 on every tenant, which silently killed:
+Get-SPEntitlementInventory, Get-SPAccessProfileInventory, Get-SPRoleInventory, Save-SPConfigurationSnapshot,
+Get-SPOrphanAccounts (worst case: the per-source 404 caused a <code>break</code>, returning an <em>empty result as success</em>),
+Get-SPSourceAggregationHealth, Measure-SPIdentityDataQuality, and Test-SPSourceOnboardingReadiness.</div>
+
+<div class="lbl b">Before &mdash; SP.ApiClient.psm1</div>
+<pre class="before">$baseUrl       = $config.Api.BaseUrl.TrimEnd('/')
+$cleanEndpoint = if ($Endpoint.StartsWith('/')) { $Endpoint } else { '/' + $Endpoint }
+$fullUrl       = $baseUrl + $cleanEndpoint + $queryString
+# '/v3/entitlements' + BaseUrl '.../v3'  =&gt;  https://tenant.../v3/v3/entitlements  (404)</pre>
+
+<div class="lbl a">After</div>
+<pre class="after"># Version-segment normalization: if the base URL's last path segment (v3, v2,
+# beta, ...) matches the endpoint's first segment, drop the duplicate so BOTH
+# endpoint styles ('/campaigns' and '/v3/campaigns') resolve correctly.
+$baseVersionSeg = ($baseUrl -split '/')[-1]
+if ($baseVersionSeg -match '^(v\d+|beta)$' -and
+    ($cleanEndpoint -eq "/$baseVersionSeg" -or
+     $cleanEndpoint.StartsWith("/$baseVersionSeg/", [System.StringComparison]::OrdinalIgnoreCase))) {
+    $cleanEndpoint = $cleanEndpoint.Substring($baseVersionSeg.Length + 1)
+    if (-not $cleanEndpoint.StartsWith('/')) { $cleanEndpoint = '/' + $cleanEndpoint }
+}</pre>
+
+<p>The central fix was chosen over editing all 14 call sites so existing external callers of either style keep working, and future
+call sites cannot reintroduce the bug. No caller in the repo uses <code>/beta</code> endpoints, so the normalization changes no other behavior.
+<span class="verified">VERIFIED: 6-case matrix incl. case-insensitive /V3/ and version-less BaseUrl</span></p>
+
+<h3><code>Test-SPConfiguration</code> connectivity / entity validation repaired in the same commit</h3>
+<p>The <code>-ValidateConnectivity</code> / <code>-ResolveEntities</code> paths could <strong>never</strong> succeed, for four stacked reasons:</p>
+<ul>
+<li>Called <code>Get-SPAuthToken -Config $config</code> and <code>Invoke-SPApiRequest &hellip; -Config $config</code> &mdash; <strong>neither function has a <code>-Config</code> parameter</strong>, so every call threw a ParameterBindingException that was reported as a config error.</li>
+<li><code>if ($token)</code> was truthy even for the <code>@{Success=$false}</code> failure envelope &mdash; a failed auth would have reported "authentication successful".</li>
+<li>Read <code>$source.name</code> / <code>$identity.name</code> off the response <em>envelope</em> instead of <code>.Data</code>, so every real entity resolved to "not found in tenant".</li>
+<li>Used <code>/v3/&hellip;</code> endpoints (the duplicate-segment bug) and <code>GET /identities/{id}</code>, which does not exist in the ISC v3 API &mdash; now uses <code>/search/identities/{id}</code>, matching <code>SP.IdentityService</code>.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="c2">2. Reports: <code>ConvertTo-SPHtmlSafe [string]$x</code> argument-mode corruption</h2>
+<p><span class="sev-high">HIGH</span> &nbsp; Commit <span class="commit">268e499</span> &nbsp; File: <code>Modules\SP.Audit\SP.AuditReportHtml.psm1</code> (5 call sites)</p>
+
+<div class="impact"><strong>Impact before the fix:</strong> PowerShell parses <code>ConvertTo-SPHtmlSafe [string]$RunMetadata[$key]</code> in
+<em>argument mode</em>: the cast is passed as literal text and indexes/property access never resolve. Four report surfaces rendered garbage:
+<ul>
+<li><strong>Audit Metadata table</strong> (every per-campaign and combined audit HTML): every value rendered as <code>[string]System.Collections.Hashtable[Tenant]</code> &mdash; tenant, filters, and run timestamp were all lost.</li>
+<li><strong>Master leadership rollup</strong>: every leader name, identity, access item, and date rendered with a literal <code>[string]</code> prefix (<code>[string]John Smith</code>).</li>
+<li><strong>Hierarchical leadership report</strong>: the Access Item / Type / Source columns rendered a full object dump (<code>[string]@{IdentityId=&hellip;}.AccessName</code>) instead of the entitlement name.</li>
+<li><strong>Level report</strong>: the subordinate-table header threw a parameter-binding error inside the subexpression and rendered an empty <code>&lt;th&gt;</code>.</li>
+</ul></div>
+
+<div class="lbl b">Before</div>
+<pre class="before">$(ConvertTo-SPHtmlSafe [string]$RunMetadata[$key])       # renders: [string]System.Collections.Hashtable[Tenant]
+$accessName = ConvertTo-SPHtmlSafe [string]$item.AccessName   # renders: [string]@{...object dump...}.AccessName
+$enc = { param($s) ConvertTo-SPHtmlSafe [string]$s }          # renders: [string]John Smith</pre>
+
+<div class="lbl a">After</div>
+<pre class="after">$(ConvertTo-SPHtmlSafe ([string]$RunMetadata[$key]))     # renders: acme-corp &lt;prod&gt; (encoded)
+$accessName = ConvertTo-SPHtmlSafe ([string]$item.AccessName)
+$enc = { param($s) ConvertTo-SPHtmlSafe ([string]$s) }</pre>
+
+<p>A repo-wide sweep for the same pattern (<code>ConvertTo-SPHtmlSafe/ConvertTo-SafeHtml/Format-SPHtmlDate</code> followed by a bare cast)
+confirmed no other call sites exist. <span class="verified">VERIFIED: all four expressions re-run in PS 5.1 &mdash; correct encoded output</span></p>
+
+<!-- ================================================================ -->
+<h2 id="c3">3. Evidence V5: crash on every run that has data</h2>
+<p><span class="sev-critical">CRITICAL</span> &nbsp; Commit <span class="commit">89df4d4</span> &nbsp; File: <code>Scripts\Invoke-SPDailyEvidenceReportV5.ps1</code></p>
+
+<div class="impact"><strong>Impact before the fix:</strong> the campaign-metadata block read <code>$isCrossCampaign</code> (and, inside the branch,
+<code>$distinctCampIds</code>) at line ~634, but both were assigned in Step&nbsp;4, ~40 lines later. The script runs under
+<code>Set-StrictMode -Version 1</code> with <code>$ErrorActionPreference = 'Stop'</code>, so any run that loaded &ge;1 trend record terminated with
+<em>"The variable '$isCrossCampaign' cannot be retrieved because it has not been set"</em> before producing any report &mdash; V5 was unrunnable.</div>
+
+<div class="lbl b">Before (order of execution)</div>
+<pre class="before">633:  $latestRecord = $trendRecords[$trendRecords.Count - 1]
+634:  if ($isCrossCampaign) {            # &lt;-- read here (StrictMode throw)
+...
+666:  $distinctCampIds = @{}             # &lt;-- assigned 32 lines later
+671:  $isCrossCampaign = ($distinctCampIds.Count -gt 1)</pre>
+
+<div class="lbl a">After</div>
+<pre class="after"># Detect mode BEFORE resolving metadata: cross-campaign (multiple campaignIds)
+# or within-campaign (same campaign, multiple captures).
+$distinctCampIds = @{}
+foreach ($rec in $trendRecords) {
+    $cid = [string]$rec.campaignId
+    if (-not [string]::IsNullOrWhiteSpace($cid)) { $distinctCampIds[$cid] = $true }
+}
+$isCrossCampaign = ($distinctCampIds.Count -gt 1)
+
+# Resolve campaign metadata from the latest record
+$latestRecord = $trendRecords[$trendRecords.Count - 1]
+if ($isCrossCampaign) { ... }</pre>
+
+<p>Step&nbsp;4 keeps its mode messages but no longer recomputes the values. <span class="verified">VERIFIED: AST parse clean; StrictMode-1 throw reproduced on this machine before the fix</span></p>
+
+<!-- ================================================================ -->
+<h2 id="c4">4. Reports: per-campaign files silently overwriting each other</h2>
+<p><span class="sev-high">HIGH</span> &nbsp; Commit <span class="commit">ff74a22</span> &nbsp; File: <code>Modules\SP.Audit\SP.AuditReportHtml.psm1</code> (<code>Export-SPAuditHtml</code> + <code>Export-SPAuditText</code>)</p>
+
+<div class="impact"><strong>Impact before the fix:</strong> filenames truncate the sanitized campaign name to 35 characters (a legitimate MAX_PATH
+guard) and append a run-level timestamp computed <em>once per export</em>. All daily campaigns &mdash; the toolkit's own doc example is
+<em>"Daily Attestation Manager Campaign - Monday, June 08, 2026"</em> &mdash; collapse to the same
+<code>Daily-Attestation-Manager-Campaign</code> prefix, so in a multi-campaign run <strong>each campaign's HTML and text report clobbered the
+previous one</strong> (the returned file list contained duplicate paths), and the combined report's TOC anchors collided the same way, sending
+every TOC link to the first campaign. For a daily-attestation evidence workflow this is silent evidence loss.</div>
+
+<div class="lbl b">Before</div>
+<pre class="before">if ($safeName.Length -gt 35) { $safeName = $safeName.Substring(0, 35).TrimEnd('-') }
+$fileName = "campaign-audit-${safeName}-${timestamp}.html"   # same name for every daily campaign
+$anchorId = "campaign-$safeName"                             # colliding TOC anchors</pre>
+
+<div class="lbl a">After</div>
+<pre class="after"># Disambiguate with the campaign id (last 8 alphanumeric chars; falls back to a
+# per-run counter when the id is missing).
+$campIdRaw = if ($audit.ContainsKey('CampaignId')) { [string]$audit['CampaignId'] } else { '' }
+$idSuffix  = ($campIdRaw -replace '[^A-Za-z0-9]', '')
+if ($idSuffix.Length -gt 8) { $idSuffix = $idSuffix.Substring($idSuffix.Length - 8) }
+if ([string]::IsNullOrWhiteSpace($idSuffix)) { $idSuffix = '{0:D3}' -f $writtenFiles.Count }
+$fileName = "campaign-audit-${safeName}-${idSuffix}-${timestamp}.html"
+$anchorId = "campaign-$safeName-$idSuffix"</pre>
+
+<p>The filename stays well inside MAX_PATH (80-char worst case). The same suffix was applied to the text exporter, which already had
+<code>$campId</code> in scope. <span class="verified">VERIFIED: AST parse clean; naming matrix checked by hand</span></p>
+
+<!-- ================================================================ -->
+<h2 id="c5">5. Cache: <code>-RefreshCache</code> never refreshed; the meta sidecar could lie about provenance</h2>
+<p><span class="sev-high">HIGH</span> &nbsp; Commit <span class="commit">29d9982</span> &nbsp; File: <code>Modules\SP.Audit\SP.AuditQueries.psm1</code> (<code>Get-SPCachedCampaignItems</code>)</p>
+
+<div class="impact"><strong>Impact before the fix</strong> (four related defects in the campaign items cache):
+<ul>
+<li><strong>-RefreshCache was a no-op on reads.</strong> Both cache-read layers gated only on <code>-not $NoCache</code>, so <code>-RefreshCache</code> alone returned the existing hit. Because COMPLETED campaigns are cached as <em>permanent</em>, a completed campaign's cache could <strong>never</strong> be refreshed with this flag &mdash; despite the code's own contract: <em>"-RefreshCache: skip read but DO write"</em>.</li>
+<li><strong>The <code>-NoCache -RefreshCache</code> workaround corrupted provenance.</strong> It streamed fresh items to disk but the finalize block started with <code>if ($NoCache)</code>, so the meta sidecar was never rewritten. Fresh items then sat next to the <em>old</em> meta; if that meta said <code>Status=ACTIVE</code> and the campaign had completed, the seal-on-transition path stamped freshly fetched <em>post-completion</em> data as <code>CapturedWhileActive=$true / Unverified=$false</code> &mdash; the flags the reporting layer uses to distinguish honest ACTIVE-state data from ISC's post-completion rewriting.</li>
+<li><strong>The partial-fetch resume path ignored both switches</strong>, so a leftover partial file was silently blended into a "fresh" <code>-NoCache</code>/<code>-RefreshCache</code> pull.</li>
+<li><strong>Pure <code>-NoCache</code> fetches polluted the session memory cache.</strong> The fresh bypass pull (marked permanent for COMPLETED campaigns) was stored in memory, so the <em>next</em> default call served it instead of the preserved honest disk cache &mdash; contradicting "fresh data is only used for this run".</li>
+</ul></div>
+
+<div class="lbl b">Before</div>
+<pre class="before">if (-not $NoCache -and $script:_ItemMemCache.ContainsKey($campId)) { ... return cached }   # layer 1
+if (-not $NoCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) { ... }  # layer 2
+if ($isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) { <em>resume partial</em> }
+...
+if ($NoCache) { <em>"RefreshCache mode" message -- but meta2 never written</em> }
+elseif ($writeToCache -and $allItems.Count -gt 0) { <em>meta2 write</em> }
+...
+$script:_ItemMemCache[$campId] = $memEntry3   # unconditional</pre>
+
+<div class="lbl a">After</div>
+<pre class="after">if (-not $NoCache -and -not $RefreshCache -and $script:_ItemMemCache.ContainsKey($campId)) { ... }
+if (-not $NoCache -and -not $RefreshCache -and $isCacheable -and ...) { ... }
+if (-not $NoCache -and -not $RefreshCache -and
+    $isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) { <em>resume</em> }
+...
+if ($NoCache -and -not $RefreshCache) { <em>pure NoCache: preserve disk cache</em> }
+elseif ($writeToCache -and $allItems.Count -gt 0) { <em>meta2 write -- now also runs for
+    -RefreshCache and -NoCache -RefreshCache, keeping items + meta consistent</em> }
+...
+if (-not ($NoCache -and -not $RefreshCache)) {           # pure -NoCache skips memory too
+    $script:_ItemMemCache[$campId] = $memEntry3
+}</pre>
+
+<p>Semantics now match the documented contract exactly:
+<code>default</code> = read-through with TTL; <code>-RefreshCache</code> = skip reads, full re-pull, rewrite items+meta;
+<code>-NoCache</code> = fully fresh data for this run only, disk <em>and</em> memory caches untouched.
+<span class="verified">VERIFIED: AST parse clean; decision table walked for all four switch combinations</span></p>
+
+<!-- ================================================================ -->
+<h2 id="c6">6. Auth: dead tenant-isolation guard; JWT decoded as base64url</h2>
+<p><span class="sev-high">HIGH</span> &nbsp; Commit <span class="commit">d253c8d</span> &nbsp; File: <code>Modules\SP.Core\SP.Auth.psm1</code></p>
+
+<div class="impact"><strong>Impact before the fix:</strong> the "TENANT ISOLATION GUARD" in <code>Get-SPAuthToken</code> &mdash; which exists to prevent a
+token acquired for tenant A being served to a toolkit instance re-configured for tenant B in the same <code>powershell.exe</code> process &mdash;
+read <code>$config</code> <em>before</em> the <code>$config = Get-SPConfig</code> assignment (which sits after the cache checks). The configured tenant URL
+was therefore always empty: the mismatch eviction could never fire, and <code>TenantUrl</code> was never stored alongside cached tokens, so the
+guard was dead code on every path. Independently, <code>Set-SPBrowserToken</code> decoded the JWT payload with standard Base64 &mdash; JWT segments
+are base64<strong>url</strong>-encoded, so extraction threw (silently) for any payload containing <code>-</code>/<code>_</code>, i.e. most real ISC tokens,
+and browser tokens never carried a TenantUrl either.</div>
+
+<div class="lbl b">Before</div>
+<pre class="before">if (-not $Force) {
+    try {
+        $configTenantUrl = ''
+        if ($null -ne $config -and ...)          # $config = Get-SPConfig happens ~55 lines LATER
+            $configTenantUrl = [string]$config.Authentication.ConfigFile.TenantUrl
+...
+$payloadB64 = $segments[1].PadRight(($segments[1].Length + 3) -band -bnot 3, '=')
+[System.Convert]::FromBase64String($payloadB64)   # throws on '-' or '_'</pre>
+
+<div class="lbl a">After</div>
+<pre class="after">if (-not $Force) {
+    try {
+        $configTenantUrl = ''
+        $guardConfig = $null
+        try { $guardConfig = Get-SPConfig } catch { }        # guard loads config itself
+        if ($null -ne $guardConfig -and ...) { $configTenantUrl = [string]$guardConfig...TenantUrl }
+...
+$config = Get-SPConfig
+# (Re)compute for the cache-store step, so TenantUrl is stored on ALL
+# acquisition paths -- including -Force.
+$configTenantUrl = '' ; if (...) { $configTenantUrl = [string]$config...TenantUrl }
+...
+# JWT segments are base64URL-encoded: map the URL-safe alphabet first.
+$payloadB64 = $segments[1].Replace('-', '+').Replace('_', '/')
+$payloadB64 = $payloadB64.PadRight((($payloadB64.Length + 3) -band -bnot 3), '=')</pre>
+
+<p><span class="verified">VERIFIED: base64url decode reproduced &mdash; old code throws on a real-shaped payload, new code extracts the issuer URL</span></p>
+
+<!-- ================================================================ -->
+<h2 id="c7">7. Quick wins (four independent one-commit fixes)</h2>
+<p>Commit <span class="commit">4b2b410</span></p>
+
+<h3>7a. Rubber-stamp risk columns were always "None" <span class="sev-high">(HIGH)</span></h3>
+<p><code>Export-SPAuditCsv</code> (reviewers CSV) and <code>Export-SPGovernanceBIData</code> (Power BI/Tableau feed) built their risk lookup from
+<code>$rr.Name</code> &mdash; but <code>Measure-SPAuditRubberStampRisk</code> emits <code>.ReviewerName</code>. The lookup stayed empty, so
+<code>RubberStampRisk</code> / <code>ReviewerRubberStampRisk</code> was <code>'None'</code> for <strong>every reviewer</strong> even at High severity.</p>
+<pre class="before">$rrName = if ($null -ne $rr.Name) { [string]$rr.Name } else { '' }   # .Name never exists</pre>
+<pre class="after">$rrName = if ($null -ne $rr.ReviewerName) { [string]$rr.ReviewerName }
+          elseif ($null -ne $rr.Name)     { [string]$rr.Name }
+          else { '' }   # accepts both shapes, like Export-SPCampaignCompletionReport</pre>
+
+<h3>7b. Single-operation JSON Patch serialized as an object <span class="sev-high">(HIGH)</span></h3>
+<p>The pipeline unrolls a single-element array, so a one-op RFC 6902 patch &mdash; the most common case &mdash; was sent as
+<code>{...}</code> instead of <code>[{...}]</code> and rejected by ISC with 400.</p>
+<pre class="before">$invokeParams['Body'] = $Body | ConvertTo-Json -Depth 20       # 1-op patch: '{...}'</pre>
+<pre class="after">$invokeParams['Body'] = ConvertTo-Json -InputObject $Body -Depth 20   # 1-op patch: '[{...}]'</pre>
+<p><span class="verified">VERIFIED: before/after serialization compared in PS 5.1</span></p>
+
+<h3>7c. Transient API failures poisoned the identity cache for the whole session <span class="sev-high">(HIGH)</span></h3>
+<p>The <code>SPIdentity</code> / <code>SPEmailLookup</code> stores never expire in-memory (TTL 0). A single 429/timeout cached
+<code>Found=$false</code>, so that identity rendered as a blank name/manager in <strong>every report for the rest of the session</strong>.
+Failure results now carry a 15-minute per-item TTL (a capability <code>SP.CacheService</code> already supported); successful resolutions keep
+their original session + disk caching, and genuine zero-hit searches still cache for the session.</p>
+<pre class="after">Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist -TtlMinutes 15</pre>
+<p><span class="verified">VERIFIED: failure entry expires and refetches after TTL; success entry survives (timestamp-rewind test)</span></p>
+
+<h3>7d. Identity disk-cache compaction silently no-oped when everything expired <span class="sev-medium">(MEDIUM)</span></h3>
+<p><code>Write-SPHtmlFile</code> declared <code>[Parameter(Mandatory)][string]$Content</code>; PowerShell rejects an empty string for a mandatory
+string parameter, and <code>Import-SPIdentityCacheFromDisk</code> swallowed the exception &mdash; so whenever <em>all</em> cached identities had
+expired (e.g. the first run of a new day past the 24h TTL), the stale file was never compacted or emptied.</p>
+<pre class="after">[Parameter(Mandatory)]
+[AllowEmptyString()]
+[string]$Content</pre>
+<p><span class="verified">VERIFIED: empty-content write now succeeds (0-byte file)</span></p>
+
+<!-- ================================================================ -->
+<h2 id="c8">8. Round 2 &mdash; twenty further fixes</h2>
+<p>Each verified the same way as Round 1 (source re-read, empirical checks where behavior is reproducible, Pester suites per theme). Commits in order:</p>
+
+<table>
+<tr><th>Commit</th><th>Refs</th><th>What changed and why</th></tr>
+<tr><td><span class="commit">079d515</span></td><td>E3, E2</td><td><strong>V7 suspect filter:</strong> a COMPLETED/pending=0/&ge;99.5% record is indistinguishable from a genuinely finished campaign, so unconditional exclusion deleted every legitimately-completed day (and an all-complete window died with exit 5). Suspect records are now dropped only when the same calendar day also has an honest capture; suspect-only days are kept, flagged <code>IsSuspect</code> (rendered dashed), with a console note. <strong>V5 scope-added:</strong> the baseline pass re-indexed <code>$trendRecords[$dailyData.IndexOf($d)]</code> &mdash; positional alignment that breaks with multi-capture days or cutoff-filtered keys, crediting one day's scope growth to another. Now read from the same record the day entry is built from.</td></tr>
+<tr><td><span class="commit">b10c2ad</span></td><td>E5</td><td><strong>Series chrono-key culture:</strong> period tokens parsed with the host culture &mdash; on a dd/MM host, '6/7/2026' parsed as July 6 (verified under en-GB), reordering series instances so the wrong one became baseline/newest and the V4c/V4d/V4e delta engine misclassified the whole series. InvariantCulture is tried first; host culture remains a fallback.</td></tr>
+<tr><td><span class="commit">96a0ddd</span></td><td>D2, D3, D11</td><td><strong>Remediation decision matching:</strong> three surfaces matched the literal string 'REVOKE' only, dropping REVOKED/DENY/REJECT/EXCEPTION and nested <code>{value:'REVOKE'}</code> shapes &mdash; the remediation-proof section could show 0 revoked while the decisions section showed N. All now unwrap nested shapes and use <code>ConvertTo-SPCanonicalDecision</code> (verified: all five variants classify Removed/Queued/Pending instead of NA). <code>Measure-SPCampaignMetrics</code> got the same nested unwrap (KPI path no longer reports 0% on nested-shape tenants). <strong>Event matching:</strong> a REVOKE account-activity event with items now requires the entitlement name to match &mdash; a source-only match let one executed revoke mark unrelated same-source revocations "Provisioned", hiding failed revokes from Overdue/Failed.</td></tr>
+<tr><td><span class="commit">6ba63c4</span></td><td>E6, E7</td><td><strong>Orchestrator accounting:</strong> Steps 8/9 counted only thrown exceptions; returned <code>Success=$false</code> envelopes fell through silently, so an all-apps-failed collection printed a green "0 campaign(s) checked" and exit 0. Step 11 (stalled reviewers) never recorded a step result or raised the exit code &mdash; warnings left no trace in orchestrator-audit.jsonl; Step 12's warning paths never raised the exit code and two lines were mislabeled "Step 11:". All fixed; scheduled-task monitoring keyed on exit codes / the audit JSONL now sees these.</td></tr>
+<tr><td><span class="commit">343686f</span></td><td>B5, B9</td><td><strong>Interrupted-refresh sealing:</strong> a refetch deleted the items file at fetch start but left the old meta until finalize; killed mid-fetch, the next run loaded the partial set through the valid-looking meta and (if the campaign had completed) sealed it permanent. The stale meta is now removed at fetch start &mdash; sticky FirstSeenStatus/CapturedWhileActive provenance captured first and reused at finalize &mdash; leaving the standard items-without-meta partial signature the resume path already handles. <strong>Memory-cache keying:</strong> keys are now <code>campaignId|cachePath</code> so mixed <code>-CachePath</code> sessions can't serve one directory's items for another; per-campaign clear removes all paths. Cache suites: 61/61.</td></tr>
+<tr><td><span class="commit">8f14436</span></td><td>A4, A5</td><td><strong>Method-aware retries:</strong> status-0 (incl. client TimeoutSec expiry) and 5xx can occur after the server processed the call, so blind re-sends risked duplicate campaigns / re-submitted decision batches. 429 (rejected before processing) still retries every method; 5xx/status-0 retry only idempotent methods. <strong>Query params:</strong> null values are skipped instead of NRE-ing outside the normalized error envelope. API suites: 36/36.</td></tr>
+<tr><td><span class="commit">6c044b0</span></td><td>E8</td><td><strong>V6/V7 window aggregates:</strong> CUMULATIVE/TOTALS rows summed daily snapshots, multiply-counting any campaign spanning several days (3-day campaign with revoked 5&rarr;7&rarr;8 rendered 20; a 100-item campaign over 5 days rendered "TOTALS: 500 items" with an inflated %-denominator). Aggregates now take the latest snapshot per distinct campaign (V6: the Revoked column; its other columns are genuine per-day deltas), and labels disclose the campaign count. V6 suite: 19/19.</td></tr>
+<tr><td><span class="commit">b0e8311</span></td><td>D6, D7, D8, D9, B11, E9, E10</td><td><strong>Quick-wins batch 2:</strong> coverage report sorted hashtables with <code>Sort-Object -Property</code> (a PS 5.1 no-op &mdash; LastCampaign was insertion-order); delegation lead-times were differenced against the loop-leaked last campaign's created date (now computed at collection, both sides UTC); aggregation freshness mixed local-Kind parses with UtcNow (skewed by the UTC offset); signed empty certs were classified NotStarted and escalated to leadership; the PII ACL warning missed FullControl/Modify; the scraper's <code>-Until</code> excluded same-day timestamped reports and counted per report file instead of per calendar day (regenerated reports survived <code>-MinMisses 2</code>, deflated percentages, duplicated heatmap columns). Suites: 102/102.</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="c9">9. Round 3 &mdash; reassignment-stable scope key + four user-decided semantics changes</h2>
+<p>The scope-key change was driven by a user-reported requirement; the four semantics changes (D4/D5/E4/C3) were
+decided interactively &mdash; each option was presented with its headline-KPI consequences and the recommended choice was approved.</p>
+
+<h3>9a. Reassignment-stable scope key (finding F1) &mdash; <span class="commit">758f707</span> <span class="sev-high">HIGH</span></h3>
+<div class="impact"><strong>The requirement:</strong> campaigns and "newly approved" items must be linked to the real cache and the user's
+primary key &mdash; an entitlement reassigned to a new reviewer must NOT report as newly approved.
+<strong>The defect:</strong> every scope key in the toolkit (snapshot <code>Key</code>, diff maps, series <code>ItemKey</code>, V3's
+<code>Get-V3Key</code>, entitlement-history timelines) was AccessId-first &mdash; but ISC regenerates access ids when a certification is
+reassigned (already detected by <code>Invoke-SPCacheDiagnostic</code>'s cross-campaign check, which called out exactly this false-"newly added"
+mechanism). A reassigned grant changed keys between captures: the diff engine classified it Removed+Added ("newly in scope"), the series
+engine NewlyInScope/NewlyAttested, and a decision on it reported as "newly approved".</div>
+<div class="lbl b">Before</div>
+<pre class="before">Key = IdentityId | AccessId (regenerated on reassignment) | SourceId
+&rarr; reassignment: old key vanishes (Removed), new key appears (Added/"newly approved")</pre>
+<div class="lbl a">After</div>
+<pre class="after">Key = IdentityId | AccessName (lowercased; AccessId only when name blank) | SourceId-else-name
+&rarr; reassignment: key unchanged; decisions carry over
+# shared Get-SPStableScopeKey (SP.CampaignDelta, exported); the diff maps, entitlement-history
+# timelines, scope CSV, and V3 RECOMPUTE the key from persisted fields at load time, so old
+# (AccessId-keyed) snapshots stay comparable with new ones -- no avalanche diff on upgrade.</pre>
+<p>Accepted trade-off (user-approved): an entitlement RENAME churns once as removed+added; same-named entitlements on one source
+for one identity collapse to one key. <span class="verified">VERIFIED: simulated reassignment (new cert id + regenerated AccessId, same
+grant) through Build-SPCampaignSnapshotData + Compare-SPCampaignSnapshots yields Added=0 / Removed=0 (was 1/1); CD-06 rewritten as a
+reassignment-stability regression test; 121/121 delta/diff/series/trend/V3 tests pass</span></p>
+
+<h3>9b. D4 &mdash; honest pending decision dates + decided-only rubber-stamp metrics &mdash; <span class="commit">444be5f</span></h3>
+<p>Pending items no longer get the modified/created fallback as a fabricated DecisionDate (undecided rows render blank instead of
+"decided at campaign creation"). Rubber-stamp metrics analyze decided items only: the approval-rate denominator now matches its own
+documentation ("% of decisions that are APPROVE") &mdash; reviewers previously masked by pending items in their denominator will now
+correctly flag &mdash; and shared fallback timestamps can no longer fabricate bulk-decision clusters.</p>
+
+<h3>9c. D5 &mdash; distinct-reviewer executive KPIs &mdash; <span class="commit">444be5f</span></h3>
+<p>The exec summary's "X / Y Reviewers Signed Off" and Reviewer Completion % now count each reviewer once ("signed" = ALL their
+certs signed &mdash; same definition as <code>Get-SPDistinctReviewerSignOff</code>); reassigned entries arrive one-per-cert and previously
+inflated both figures. <code>Group-SPReviewerActions</code> aggregation fixed alongside: Phase is SIGNED only when every cert is signed
+(was first-enumerated-cert-wins) and SignOffDate is the most recent (was first-non-blank-kept-forever).</p>
+
+<h3>9d. E4 &mdash; V4e coverage counts the independent undecided fact &mdash; <span class="commit">f73f208</span></h3>
+<p>"Series attestation coverage" now subtracts items whose independent <code>IsPersistentlyUndecided</code> flag is set (never genuinely
+decided anywhere in the series) instead of the masked <code>Classification</code> &mdash; brand-new undecided entitlements no longer count
+as "genuinely attested" (10 new undecided items could previously render "100% genuinely attested").</p>
+
+<h3>9e. C3 &mdash; leadership level-report drill-down/nav links &mdash; <span class="commit">444be5f</span></h3>
+<p>Subordinate drill-down and parent nav links now mirror the actual filename scheme
+(<code>prefix-name-id-runStamp.html</code>): <code>Export-SPLeadershipLevelHtml</code> takes a <code>-RunStamp</code> shared across every
+level of a report set (threaded by the band-filtered wrapper), links embed the target's id + stamp, and the dead
+<code>executive-summary.html</code> fallback link was removed. Every up/down link in the generated set now resolves.
+<span class="verified">VERIFIED: 252/252 report/leadership/reviewer/V4e tests pass</span></p>
+
+<!-- ================================================================ -->
+<h2 id="remaining">Remaining findings (documented, not yet fixed)</h2>
+<p>After Round 3, the following remain open &mdash; all are lower-risk or judgment-call items, catalogued with locations and failure scenarios in <code>REVIEW-FINDINGS.md</code>:</p>
+<table>
+<tr><th>Sev</th><th>Finding</th><th>Ref</th><th>Why deferred</th></tr>
+<tr><td class="sev-low">LOW</td><td><code>Get-SPConfig</code> returns a shared mutable reference</td><td>B8</td><td>A deep-clone changes object identity for every caller; no in-repo caller mutates the config today. Revisit if a mutation appears.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Concurrent-process identity-cache compaction append-loss window</td><td>B12</td><td>Needs a cross-process mutex (pattern exists in Add-SPItemCacheLines); orchestrator currently runs steps sequentially.</td></tr>
+<tr><td class="sev-low">LOW</td><td><code>Test-SPCacheValid</code> lazy-load asymmetry</td><td>B13</td><td>Latent &mdash; no production caller.</td></tr>
+<tr><td class="sev-low">LOW</td><td><code>TrimStart('.\')</code> charset corruption of <code>..\</code>-style vault paths</td><td>B14</td><td>Only misconfigured relative parent paths are affected; error message names the resolved path.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Orphan-account include-switches only apply to the Uncorrelated category</td><td>D10</td><td>Behavioral choice: Terminated/Dangling categories arguably should always show disabled/service accounts.</td></tr>
+<tr><td class="sev-low">LOW</td><td><code>ReviewerCount</code> metric counts certifications, not distinct reviewers</td><td>D12</td><td>Metric-schema change; consumers may expect the current definition.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Comparison report colors slower response times green</td><td>D13</td><td>Cosmetic; fix pattern exists at Export-SPCampaignCompletionReport:6017.</td></tr>
+<tr><td class="sev-low">LOW</td><td>BI export leadership columns read keys that never exist</td><td>D14</td><td>Needs the leadership-data shape reconciled with Group-SPAuditByLeadership first.</td></tr>
+<tr><td class="sev-low">LOW</td><td>RC03 expanded tree labels unknown-Enabled members "enabled"</td><td>D15</td><td>Cosmetic 3-state badge.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Scraper reads only the first table per Pending collapsible</td><td>E11</td><td>Latent format hazard; the current report generator emits one table.</td></tr>
+</table>
+
+<h2>Commit log</h2>
+<table>
+<tr><th>Commit</th><th>Theme</th></tr>
+<tr><td><span class="commit">dbb6066</span></td><td>fix(api): normalize duplicate API-version segment in endpoint URLs (+ Test-SPConfiguration repair, + REVIEW-FINDINGS.md)</td></tr>
+<tr><td><span class="commit">268e499</span></td><td>fix(reports): parenthesize casts passed to ConvertTo-SPHtmlSafe</td></tr>
+<tr><td><span class="commit">89df4d4</span></td><td>fix(evidence-v5): compute cross-campaign mode before it is consumed</td></tr>
+<tr><td><span class="commit">ff74a22</span></td><td>fix(reports): disambiguate per-campaign report filenames with campaign id</td></tr>
+<tr><td><span class="commit">29d9982</span></td><td>fix(cache): make -RefreshCache actually refresh and keep meta honest</td></tr>
+<tr><td><span class="commit">d253c8d</span></td><td>fix(auth): arm the dead tenant-isolation guard; decode JWT as base64url</td></tr>
+<tr><td><span class="commit">4b2b410</span></td><td>fix: rubber-stamp CSV columns, JSON Patch arrays, identity failure TTL, empty-file writes</td></tr>
+<tr><td><span class="commit">079d515</span></td><td>fix(evidence): stop V7 deleting completed days; align V5 scope-added to its own day</td></tr>
+<tr><td><span class="commit">b10c2ad</span></td><td>fix(series): parse period tokens with InvariantCulture first</td></tr>
+<tr><td><span class="commit">96a0ddd</span></td><td>fix(remediation): recognize decision variants; require entitlement match on events</td></tr>
+<tr><td><span class="commit">6ba63c4</span></td><td>fix(orchestrator): count returned failures; record Step 11 in audit trail</td></tr>
+<tr><td><span class="commit">343686f</span></td><td>fix(cache): remove stale meta at refetch start; key memory cache by cache path</td></tr>
+<tr><td><span class="commit">8f14436</span></td><td>fix(api): method-aware retries; null-safe query params</td></tr>
+<tr><td><span class="commit">6c044b0</span></td><td>fix(evidence): stop CUMULATIVE/TOTALS rows multiply-counting multi-day campaigns</td></tr>
+<tr><td><span class="commit">b0e8311</span></td><td>fix: quick-wins batch 2 — sort no-op, loop leak, UTC skew, escalation noise, ACL gap, scraper day-counting</td></tr>
+<tr><td><span class="commit">758f707</span></td><td>fix(scope-key): key grants by identity + access NAME + source, not churn-prone AccessId</td></tr>
+<tr><td><span class="commit">444be5f</span></td><td>fix(reports): honest pending dates, decided-only rubber-stamp metrics, distinct reviewer KPIs (+ level-report link fix)</td></tr>
+<tr><td><span class="commit">f73f208</span></td><td>fix(evidence-v4e): coverage counts the independent undecided fact</td></tr>
+<tr><td><span class="commit">7561e61</span></td><td>test(series): update key literals and stability semantics to the name-based scope key</td></tr>
+</table>
+
+<h2>Verification summary</h2>
+<ul>
+<li><strong>Final full battery after Round 3 (all 49 non-GUI suites, Pester 5.7.1 on Windows PowerShell 5.1): 2192 passed / 3 failed / 13 skipped.</strong>
+The 3 failures (DE-03, TQ-01, TQ-04 &mdash; governance dashboard trend direction) fail <em>identically on master</em> (verified via a clean
+baseline worktree) &mdash; pre-existing, unrelated to this branch. Round 3 verification also includes: the reassignment diff simulation
+(0 added / 0 removed, was 1/1), 121/121 key-suite tests, 252/252 report/leadership/reviewer/V4e tests, and the series suites re-run
+green (47/47) after their fixtures were updated to the new key semantics.</li>
+<li><strong>Round 2 full battery (Pester 5.7.1, Windows PowerShell 5.1): 553 passed / 0 failed / 0 skipped</strong> across 22 test files covering every touched module,
+adding SP.CampaignDiff, SP.DailyEvidenceV6, SP.DailyOrchestrator, SP.CampaignSeriesKey, SP.ReviewerIdentity, SP.CompletionConsistency, SP.ApiResilience to the Round 1 set.
+Per-theme runs during Round 2: cache suites 61/61, API 36/36, V6 19/19, diff/queries/identity 102/102.</li>
+<li><strong>Round 1 battery: 341 passed / 0 failed / 0 skipped</strong> across the 15 test files covering the Round 1 modules:
+SP.CacheService, SP.CacheProvenance, SP.CacheRobustness, SP.CacheStaleness, SP.CacheCountLabel, SP.CacheValidate, SP.CachedCampaignSeries,
+SP.IdentityService, SP.HtmlHelpers, SP.ApiClient, SP.Auth, SP.Config, SP.AuditQueries, SP.AuditReport, SP.SharedIntegration.</li>
+<li><strong>Round 2 empirical checks:</strong> chrono-key culture swap reproduced under en-GB (old: July 6; new: June 7); all five revoke variants
+classify Removed/Queued/Pending instead of NA after the canonical-decision change.</li>
+<li><strong>End-to-end smoke run of V5</strong> with synthetic trend data (3 daily records, <code>-NoCapture</code>): the script now runs past the former
+crash point, resolves campaign metadata, and writes both the HTML (30&nbsp;KB) and JSON outputs; exit code 5 was the <em>documented health verdict</em>
+for the fixture's 0% completion, not an error. All smoke fixtures were removed afterward.</li>
+<li><strong>Empirical before/after checks in PS 5.1</strong> for: URL normalization (6-case matrix), all four HtmlSafe expressions, base64url JWT decode,
+single-op JSON Patch serialization, failure-TTL expiry vs. session persistence, and empty-content file writes.</li>
+<li>AST parse checks clean on every edited file.</li>
+</ul>
+
+<p class="note">Generated 2026-07-07 on branch <code>fix/review-findings</code>.</p>
+
+</body>
+</html>

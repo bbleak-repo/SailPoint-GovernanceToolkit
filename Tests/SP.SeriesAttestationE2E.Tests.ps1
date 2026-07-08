@@ -23,10 +23,10 @@
                   is EXCLUDED from the newly-attested section.
 
     Scenario items (static scope across all 11 instances => NewlyInScope = 0):
-      id-alice|ent-fin-rw|src-ad  NewlyAttested            (genuine approve only @ newest)
-      id-bob|ent-hr-ro|src-ad     AlreadyAttestedEarlier   (genuine approve mid-window)
-      id-carol|ent-vpn|src-ad     NewlyAttested + masked   (prior idNowAutoApproved ignored)
-      id-dave|ent-admin|src-ad    PersistentlyUndecided    (pending in all 11)
+      id-alice|finance-rw|src-ad  NewlyAttested            (genuine approve only @ newest)
+      id-bob|hr-readonly|src-ad     AlreadyAttestedEarlier   (genuine approve mid-window)
+      id-carol|vpn-access|src-ad     NewlyAttested + masked   (prior idNowAutoApproved ignored)
+      id-dave|admin-console|src-ad    PersistentlyUndecided    (pending in all 11)
 
     The CLI-invoking Describe is gated behind -Skip:(-not $script:PwshAvailable) for
     powershell.exe (always present on this Win box) mirroring SP.SeriesAttestationCli.Tests.ps1.
@@ -56,10 +56,10 @@ BeforeAll {
         & $gen -OutputDir $script:CacheDir | Out-Null
     }
 
-    $script:AliceKey = 'id-alice|ent-fin-rw|src-ad'
-    $script:BobKey   = 'id-bob|ent-hr-ro|src-ad'
-    $script:CarolKey = 'id-carol|ent-vpn|src-ad'
-    $script:DaveKey  = 'id-dave|ent-admin|src-ad'
+    $script:AliceKey = 'id-alice|finance-rw|src-ad'
+    $script:BobKey   = 'id-bob|hr-readonly|src-ad'
+    $script:CarolKey = 'id-carol|vpn-access|src-ad'
+    $script:DaveKey  = 'id-dave|admin-console|src-ad'
 }
 
 Describe 'E2E-GROUP: variance-tolerant auto-derivation collapses all 11 into ONE series' {

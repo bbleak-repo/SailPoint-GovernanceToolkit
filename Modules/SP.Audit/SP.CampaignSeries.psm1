@@ -462,10 +462,14 @@ function Get-SPSeriesItemFacts {
     }
     $facts.SourceName = $sourceName
 
-    # Compose the STABLE cross-instance key `idPart|accessPart|sourcePart`. Immutable IDs win over
-    # names so an entitlement/source RENAME does not churn the key (same rationale as the snapshot
-    # Key at SP.CampaignDelta.psm1:207-212). Lower-case ONLY name-derived fallback components so
-    # human case variance collapses; leave GUID/id components verbatim.
+    # Compose the STABLE cross-instance key `idPart|accessPart|sourcePart`. The access NAME
+    # wins over AccessId: ISC regenerates access ids when a certification is reassigned to a
+    # new reviewer (AccessId churn, detected by Invoke-SPCacheDiagnostic), so an id-first key
+    # made the SAME grant classify as NewlyInScope -- and its decision as "newly attested" --
+    # after every reassignment. The identity's primary key + entitlement name + source are
+    # the stable coordinates (same rationale as Get-SPStableScopeKey in SP.CampaignDelta).
+    # SourceId IS genuinely immutable and still wins over source name. Lower-case name-derived
+    # components so human case variance collapses; leave GUID/id components verbatim.
     $idPart = $facts.IdentityId
     $accessId = $facts.AccessId
     $accessName = $facts.AccessName
@@ -482,14 +486,19 @@ function Get-SPSeriesItemFacts {
     }
 
     $accessPart = ''
-    if (-not [string]::IsNullOrWhiteSpace($accessId)) {
-        $accessPart = $accessId.Trim()
-    }
-    elseif ($accessType.ToUpperInvariant() -eq 'ACCOUNT' -or [string]::IsNullOrWhiteSpace($accessName)) {
+    if ($accessType.ToUpperInvariant() -eq 'ACCOUNT' -and -not [string]::IsNullOrWhiteSpace($nativeIdentity)) {
+        # Account-level rows: the native identity is the stable discriminator.
         $accessPart = 'account:' + $nativeIdentity.Trim().ToLowerInvariant()
     }
-    else {
+    elseif (-not [string]::IsNullOrWhiteSpace($accessName)) {
         $accessPart = $accessName.Trim().ToLowerInvariant()
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($accessId)) {
+        # Blank name: the (churn-prone) id is still better than nothing.
+        $accessPart = $accessId.Trim()
+    }
+    else {
+        $accessPart = 'account:' + $nativeIdentity.Trim().ToLowerInvariant()
     }
 
     $sourcePart = ''

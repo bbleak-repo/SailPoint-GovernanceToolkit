@@ -110,8 +110,13 @@ function Build-SPQueryString {
 
     $pairs = [System.Collections.Generic.List[string]]::new()
     foreach ($key in $QueryParams.Keys) {
-        $encodedKey   = [System.Uri]::EscapeDataString($key)
-        $encodedValue = [System.Uri]::EscapeDataString($QueryParams[$key].ToString())
+        # Skip null values (a conditionally-built filter like @{filters=$null} used
+        # to NRE on .ToString() here -- outside the retry try/catch, so the caller
+        # got a raw throw instead of the normalized @{Success=$false} envelope).
+        $value = $QueryParams[$key]
+        if ($null -eq $value) { continue }
+        $encodedKey   = [System.Uri]::EscapeDataString([string]$key)
+        $encodedValue = [System.Uri]::EscapeDataString($value.ToString())
         $pairs.Add("$encodedKey=$encodedValue")
     }
 
@@ -323,6 +328,20 @@ function Invoke-SPApiRequest {
     # Build full URL
     $baseUrl     = $config.Api.BaseUrl.TrimEnd('/')
     $cleanEndpoint = if ($Endpoint.StartsWith('/')) { $Endpoint } else { '/' + $Endpoint }
+
+    # Version-segment normalization: Api.BaseUrl is configured WITH the API version
+    # (e.g. "https://tenant.api.identitynow.com/v3"), but some callers pass endpoints
+    # that also carry the version prefix (e.g. '/v3/entitlements'). Without this guard
+    # the request goes to '/v3/v3/entitlements' and 404s. If the base URL's last path
+    # segment (v3, v2, beta, ...) matches the endpoint's first segment, drop the
+    # duplicate from the endpoint so both endpoint styles work.
+    $baseVersionSeg = ($baseUrl -split '/')[-1]
+    if ($baseVersionSeg -match '^(v\d+|beta)$' -and
+        ($cleanEndpoint -eq "/$baseVersionSeg" -or $cleanEndpoint.StartsWith("/$baseVersionSeg/", [System.StringComparison]::OrdinalIgnoreCase))) {
+        $cleanEndpoint = $cleanEndpoint.Substring($baseVersionSeg.Length + 1)
+        if (-not $cleanEndpoint.StartsWith('/')) { $cleanEndpoint = '/' + $cleanEndpoint }
+    }
+
     $queryString = Build-SPQueryString -QueryParams $QueryParams
     $fullUrl     = $baseUrl + $cleanEndpoint + $queryString
 
@@ -387,9 +406,12 @@ function Invoke-SPApiRequest {
                 ErrorAction = 'Stop'
             }
 
-            # Attach body for mutating methods
+            # Attach body for mutating methods.
+            # -InputObject (not pipeline): piping unrolls a single-element array, so a
+            # one-operation RFC 6902 JSON Patch would serialize as {...} instead of
+            # [{...}] and ISC rejects it with 400.
             if ($Method -in @('POST', 'PUT', 'PATCH') -and $null -ne $Body) {
-                $invokeParams['Body']        = $Body | ConvertTo-Json -Depth 20
+                $invokeParams['Body']        = ConvertTo-Json -InputObject $Body -Depth 20
                 $invokeParams['ContentType'] = $ContentType
             }
 
@@ -452,10 +474,19 @@ function Invoke-SPApiRequest {
             # connection reset). These are exactly the kind of thing a retry
             # will often paper over; not retrying makes long-running audits
             # fragile on flaky networks.
+            # Method-aware: 429 is rejected BEFORE processing, so any method may
+            # retry it. 5xx and status=0 (which includes a client-side TimeoutSec
+            # expiry) can occur AFTER the server fully processed the call --
+            # blind re-sends of non-idempotent methods risked duplicate campaign
+            # creation / re-submitted decision batches, so only idempotent
+            # methods (per HTTP semantics) retry those.
+            $isIdempotentMethod = $Method -in @('GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE')
             $shouldRetry = (
                 $statusCode -eq 429 -or
-                ($statusCode -ge 500 -and $statusCode -le 599) -or
-                $statusCode -eq 0
+                ($isIdempotentMethod -and (
+                    ($statusCode -ge 500 -and $statusCode -le 599) -or
+                    $statusCode -eq 0
+                ))
             )
 
             if ($shouldRetry -and $attempt -lt $maxRetries) {

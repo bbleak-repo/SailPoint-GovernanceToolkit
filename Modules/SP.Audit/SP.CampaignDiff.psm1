@@ -47,13 +47,32 @@ function Get-SPDiffProp {
     return (Get-SPObjectProperty -Object $Object -Name $Name -Default $Default)
 }
 
+function Get-SPDiffStableKey {
+    # Reassignment-stable scope key for a snapshot item, RECOMPUTED from the item's
+    # persisted identity/access/source fields rather than trusting the persisted Key.
+    # Older snapshots carry AccessId-first keys, and ISC regenerates access ids when a
+    # certification is reassigned -- trusting the stored key made the same grant diff
+    # as Removed+Added ("newly in scope" / "newly approved") on every reassignment.
+    # Recomputing on BOTH sides keeps old and new snapshots comparable. Falls back to
+    # the persisted Key only when the component fields are absent (very old captures).
+    param([object]$Item)
+    $k = Get-SPStableScopeKey `
+            -IdentityId ([string](Get-SPDiffProp $Item 'IdentityId' '')) `
+            -AccessName ([string](Get-SPDiffProp $Item 'AccessName' '')) `
+            -AccessId   ([string](Get-SPDiffProp $Item 'AccessId' '')) `
+            -SourceId   ([string](Get-SPDiffProp $Item 'SourceId' '')) `
+            -SourceName ([string](Get-SPDiffProp $Item 'SourceName' ''))
+    if ([string]::IsNullOrWhiteSpace($k)) { $k = [string](Get-SPDiffProp $Item 'Key' '') }
+    return $k
+}
+
 function ConvertTo-SPDiffMap {
-    # key -> last item, from a snapshot's Items collection.
+    # stable scope key -> last item, from a snapshot's Items collection.
     param([object[]]$Items)
     $map = @{}
     foreach ($it in @($Items)) {
         if ($null -eq $it) { continue }
-        $k = [string](Get-SPDiffProp $it 'Key' '')
+        $k = Get-SPDiffStableKey -Item $it
         if ([string]::IsNullOrWhiteSpace($k)) { continue }
         $map[$k] = $it
     }
@@ -204,7 +223,11 @@ function Compare-SPCampaignSnapshots {
             $pRevId = if ($pc) { [string](Get-SPDiffProp $pc 'ReviewerId' '') } else { '' }
             $delta = $cMade - $pMade
             $isNew  = $cDone -and -not $pDone
-            $isNot  = ($cMade -eq 0)
+            # NotStarted requires actual work (items) that is genuinely untouched: a
+            # 0-item cert or an already-completed one is NOT "not started" -- reviewers
+            # holding signed empty certs used to be counted NotStarted AND placed on
+            # the Compliance.StalledReviewers leadership escalation list.
+            $isNot  = ($cMade -eq 0) -and ($cTot -gt 0) -and (-not $cDone)
             $isStall = (-not $cDone) -and ($delta -le 0) -and ($cTot -gt 0)
             # Reassigned: same cert, different effective reviewer than the prior capture.
             $isReassigned = ($pc -and $pRevId -and $cRevId -and ($pRevId -ne $cRevId))
@@ -926,7 +949,7 @@ function New-SPScopeCsvRow {
         Transition   = ''
         PrevDecisionDate = ''
         CurrDecisionDate = ''
-        Key          = [string](Get-SPDiffProp $Item 'Key' '')
+        Key          = (Get-SPDiffStableKey -Item $Item)
     }
 }
 
@@ -1369,7 +1392,9 @@ function Get-SPEntitlementHistory {
                 if ($IdentityName -and ($iName -notmatch [regex]::Escape($IdentityName))) { continue }
                 if ($AccessId     -and ($aId -ne $AccessId)) { continue }
                 if ($IdentityId   -and ($iId -ne $IdentityId)) { continue }
-                $k = [string](Get-SPDiffProp $it 'Key' '')
+                # Stable key (recomputed) so one grant's history doesn't fragment into
+                # separate timelines each time a reassignment regenerates its AccessId.
+                $k = Get-SPDiffStableKey -Item $it
                 if ([string]::IsNullOrWhiteSpace($k)) { continue }
                 if (-not $timelines.ContainsKey($k)) { $timelines[$k] = [System.Collections.Generic.List[object]]::new() }
                 $timelines[$k].Add([PSCustomObject]@{

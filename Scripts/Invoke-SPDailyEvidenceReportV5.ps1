@@ -629,9 +629,9 @@ if ($trendRecords.Count -eq 0) {
     exit 5
 }
 
-# Detect mode: cross-campaign (multiple campaignIds) or within-campaign (same campaign,
-# multiple captures). Computed BEFORE the metadata block below, which reads both vars --
-# under Set-StrictMode v1 reading them before assignment is a terminating error.
+# Detect mode BEFORE resolving metadata: cross-campaign (multiple campaignIds) or
+# within-campaign (same campaign, multiple captures). This must run before the
+# $isCrossCampaign branch below -- under Set-StrictMode reading it unassigned throws.
 $distinctCampIds = @{}
 foreach ($rec in $trendRecords) {
     $cid = [string]$rec.campaignId
@@ -672,8 +672,8 @@ Write-Host ''
 
 Write-Host '  Step 4: Build daily data from trend records' -ForegroundColor Cyan
 
-# (mode detection $distinctCampIds / $isCrossCampaign moved above the Step-3 metadata
-# block, which reads these vars; recomputing here would be redundant.)
+# Mode ($isCrossCampaign / $distinctCampIds) was detected in Step 3 before
+# campaign-metadata resolution, which consumes it.
 if ($isCrossCampaign) {
     Write-Host "    Mode: Cross-campaign ($($distinctCampIds.Count) campaigns -> 1 data point each)" -ForegroundColor DarkGray
 }
@@ -779,6 +779,15 @@ foreach ($dayKey in $filteredKeys) {
     $revoked  = [int](Get-V5MetricVal $m 'counts.revoked' 0)
     $pending  = [int](Get-V5MetricVal $m 'counts.pending' 0)
 
+    # Baseline detection: when scope.added >= total items, it's a first capture (no
+    # prior snapshot), not real scope growth -- suppress the misleading "+N newly
+    # added". Read scope.added from THIS day's record ($m): the previous post-loop
+    # pass re-indexed $trendRecords by $dailyData position, which misaligned as soon
+    # as a day had multiple captures (dayMap dedup) or the cutoff filter dropped a
+    # key -- crediting one day's scope growth to a different day.
+    $rawScopeAdded = [int](Get-V5MetricVal $m 'scope.added' 0)
+    $scopeAdded = if ($rawScopeAdded -ge $total -and $total -gt 0) { 0 } else { $rawScopeAdded }
+
     $dailyData += @{
         Date          = $ts.ToString('yyyy-MM-dd')
         DayLabel      = $ts.ToString('MM/dd')
@@ -788,30 +797,10 @@ foreach ($dayKey in $filteredKeys) {
         Revoked       = $revoked
         Pending       = $pending
         CompletionPct = [double](Get-V5MetricVal $m 'completion.byDecisionPct' 0)
-        ScopeAdded    = $null  # set below after baseline detection
-        RawScopeAdded = [int](Get-V5MetricVal $m 'scope.added' 0)  # captured from THIS day's record ($m)
+        ScopeAdded    = $scopeAdded
         ScopeRemoved  = [int](Get-V5MetricVal $m 'scope.removed' 0)
         PrivPending   = [int](Get-V5MetricVal $m 'counts.privPending' 0)
         PrivTotal     = [int](Get-V5MetricVal $m 'risk.privilegedTotal' 0)
-    }
-}
-
-# Baseline detection: when scope.added equals total items, it's a first capture (no prior
-# snapshot), not real scope growth. Suppress misleading "99 newly added" counts by setting
-# ScopeAdded to 0 for baseline captures. This handles the scenario where a failed run
-# (e.g., reassignment error) causes the retry to have no valid prior snapshot.
-foreach ($d in $dailyData) {
-    # Read scope.added from THIS day's own record (captured as RawScopeAdded during the build
-    # loop above), NOT by indexing $trendRecords with a position taken from the deduped/filtered
-    # $dailyData -- those two lists are not positionally aligned once dedup or the derived-date
-    # filter drops any record, so the old index pulled scope.added from a mismatched record.
-    $rawScopeAdded = [int]$d.RawScopeAdded
-    if ($rawScopeAdded -ge $d.Total -and $d.Total -gt 0) {
-        # Scope.added >= total items = baseline capture (no valid prior snapshot)
-        $d.ScopeAdded = 0
-    }
-    else {
-        $d.ScopeAdded = $rawScopeAdded
     }
 }
 

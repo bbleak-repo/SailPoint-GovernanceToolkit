@@ -1266,6 +1266,12 @@ if ($dayCount -ge 2) {
 
         [void]$sb.AppendLine("<table><thead><tr><th>Day</th><th>Campaign</th><th style='text-align:right;'>Revoked</th><th style='text-align:right;'>Newly Decided</th><th style='text-align:right;'>New Scope</th><th style='text-align:right;'>Scope Added</th><th style='text-align:right;'>Scope Removed</th><th style='text-align:right;'>Completion</th></tr></thead><tbody>")
 
+        # NewlyDecided/NewScope/ScopeAdded/ScopeRemoved are per-day DELTAS -- summing
+        # them across the window is correct. Revoked is a SNAPSHOT total (a running
+        # cumulative within a campaign), so its window aggregate must take the LATEST
+        # snapshot per distinct campaign: summing daily snapshots counted a 3-day
+        # campaign's revokes ~3x (5 -> 7 -> 8 rendered CUMULATIVE Revoked = 20, not 8).
+        $latestRevByCampaign = [ordered]@{}
         $cumRevoked = 0; $cumDecided = 0; $cumNewScope = 0; $cumScopeAdd = 0; $cumScopeRem = 0
         foreach ($d in $dailyData) {
             $dayRev   = [int]$d.Revoked
@@ -1273,7 +1279,9 @@ if ($dayCount -ge 2) {
             $dayNS    = [int]$d.NewlyApproved
             $daySA    = [int]$d.ScopeAdded
             $daySR    = [int]$d.ScopeRemoved
-            $cumRevoked  += $dayRev
+            $revCid = [string]$d.CampaignId
+            if ([string]::IsNullOrWhiteSpace($revCid)) { $revCid = [string]$d.CampaignName }
+            $latestRevByCampaign[$revCid] = $dayRev   # dailyData is date-ascending; last write wins
             $cumDecided  += $dayND
             $cumNewScope += $dayNS
             $cumScopeAdd += $daySA
@@ -1288,8 +1296,9 @@ if ($dayCount -ge 2) {
             [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$($d.DayLabel)</td><td style='font-size:11px;color:#566;'>$campShort</td><td style='text-align:right;'$revStyle>$dayRev</td><td style='text-align:right;'$ndStyle>$dayND</td><td style='text-align:right;'$nsStyle>$dayNS</td><td style='text-align:right;'>$daySA</td><td style='text-align:right;'>$daySR</td><td style='text-align:right;font-weight:600;'>$($d.CompletionPct)%</td></tr>")
         }
 
-        # Cumulative row
-        [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'><td colspan='2'>CUMULATIVE ($dayCount days)</td><td style='text-align:right;color:$($colors.Red);'>$cumRevoked</td><td style='text-align:right;color:$($colors.Green);'>$cumDecided</td><td style='text-align:right;color:$($colors.Blue);'>$cumNewScope</td><td style='text-align:right;'>$cumScopeAdd</td><td style='text-align:right;'>$cumScopeRem</td><td style='text-align:right;'>$($dailyData[$dayCount - 1].CompletionPct)%</td></tr>")
+        # Cumulative row: Revoked = latest snapshot per distinct campaign (see above)
+        foreach ($rv in $latestRevByCampaign.Values) { $cumRevoked += [int]$rv }
+        [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'><td colspan='2'>CUMULATIVE ($dayCount days, $($latestRevByCampaign.Count) campaign(s))</td><td style='text-align:right;color:$($colors.Red);'>$cumRevoked</td><td style='text-align:right;color:$($colors.Green);'>$cumDecided</td><td style='text-align:right;color:$($colors.Blue);'>$cumNewScope</td><td style='text-align:right;'>$cumScopeAdd</td><td style='text-align:right;'>$cumScopeRem</td><td style='text-align:right;'>$($dailyData[$dayCount - 1].CompletionPct)%</td></tr>")
 
         [void]$sb.AppendLine("</tbody></table></div>")
     }

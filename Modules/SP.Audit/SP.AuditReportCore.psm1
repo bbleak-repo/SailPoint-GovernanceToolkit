@@ -79,8 +79,9 @@ function Get-SPRevocationDisposition {
         [string]$SourceType,
         [string]$SourceName
     )
-    $dec = if ($null -ne $Decision) { ([string]$Decision).ToUpperInvariant() } else { '' }
-    if ($dec -ne 'REVOKE') {
+    # Canonical Revoked test so decision variants (REVOKED/DENY/REJECT/EXCEPTION)
+    # classify like plain REVOKE instead of falling to 'NA'.
+    if ((ConvertTo-SPCanonicalDecision -Decision $Decision -Justification '') -ne 'Revoked') {
         return [PSCustomObject]@{ Disposition = 'NA'; Label = 'N/A'; IsRemoved = $false; IsQueued = $false; IsPending = $false; IsConnectedAD = $false }
     }
     $isAD = Test-SPConnectedADSource -SourceType $SourceType -SourceName $SourceName
@@ -925,7 +926,10 @@ function Group-SPAuditDecisions {
         $remediationStatus = 'N/A'
         $remediationDate   = ''
         $isCompleted       = $false
-        if ($decision.ToUpperInvariant() -eq 'REVOKE') {
+        # Canonical Revoked test (not exact 'REVOKE') so REVOKED/DENY/REJECT/EXCEPTION
+        # variants get a remediation status too -- keeps this column consistent with
+        # the bucket the same item lands in.
+        if ((ConvertTo-SPCanonicalDecision -Decision $decision -Justification '') -eq 'Revoked') {
             if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['completed'] -and
                 $null -ne $rawItem.completed) {
                 try { $isCompleted = [bool]$rawItem.completed } catch { $isCompleted = $false }
@@ -943,6 +947,10 @@ function Group-SPAuditDecisions {
         # connected AD source; on any other source it is "Queued for removal" (recorded, not
         # confirmed removed). This is what every report renders so removal is never overclaimed.
         $disp = Get-SPRevocationDisposition -Decision $decision -Completed $isCompleted -SourceType $sourceType -SourceName $sourceName
+
+        # Canonical bucket computed BEFORE the record is built: the DecisionDate
+        # fallback below must know whether this item was genuinely decided.
+        $canonicalBucket = ConvertTo-SPCanonicalDecision -Decision $decision -Justification $justification
 
         # Build normalized output object
         $out = [PSCustomObject]@{
@@ -963,7 +971,7 @@ function Group-SPAuditDecisions {
             CertificationId        = $certId
             CertificationName      = $certName
             CampaignName           = $campaignName
-            DecisionDate           = if ($null -ne $rawItem.decisionDate -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.decisionDate)) { [string]$rawItem.decisionDate } elseif (-not [string]::IsNullOrWhiteSpace($systemTimestamp)) { $systemTimestamp } else { '' }   # ISC items often have no decisionDate field; fall back to the item's modified/created timestamp ($systemTimestamp), which IS when the reviewer acted.
+            DecisionDate           = if ($null -ne $rawItem.decisionDate -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.decisionDate)) { [string]$rawItem.decisionDate } elseif ($canonicalBucket -ne 'Pending' -and -not [string]::IsNullOrWhiteSpace($systemTimestamp)) { $systemTimestamp } else { '' }   # ISC items often have no decisionDate field; for DECIDED items fall back to the item's modified/created timestamp ($systemTimestamp), which IS when the reviewer acted. Pending items get NO date: their only timestamp is campaign creation, which is not a decision time -- the fallback used to render undecided items as 'decided' at campaign creation and feed false bulk-decision clusters.
             Justification          = $justification
             RemediationStatus      = $remediationStatus
             RemediationDisposition = $disp.Disposition
@@ -988,7 +996,8 @@ function Group-SPAuditDecisions {
         # approve check only runs for APPROVE variants, not REVOKE or empty decisions.
         # The classification itself lives in ConvertTo-SPCanonicalDecision -- the single
         # honest definition shared with Measure-SPCampaignMetrics so the two paths agree.
-        switch (ConvertTo-SPCanonicalDecision -Decision $decision -Justification $justification) {
+        # ($canonicalBucket was computed above, before the record build.)
+        switch ($canonicalBucket) {
             'Approved' { $approved.Add($out) }
             'Revoked'  { $revoked.Add($out) }
             default    { $pending.Add($out) }  # 'Pending'
@@ -1119,9 +1128,25 @@ function Group-SPReviewerActions {
             $entry.DecisionsMade = $entry.DecisionsMade + $decisionsMade
             $entry.DecisionsTotal = $entry.DecisionsTotal + $decisionsTotal
 
-            # Use most recent sign-off date
-            if ([string]::IsNullOrWhiteSpace($entry.SignOffDate) -and -not [string]::IsNullOrWhiteSpace($signOffDate)) {
-                $entry.SignOffDate = $signOffDate
+            # Phase aggregates across ALL the reviewer's certs: SIGNED only when every
+            # cert is signed. The old behavior kept the FIRST cert's phase, so a reviewer
+            # whose first-enumerated cert happened to be SIGNED was reported (and counted
+            # by the exec sign-off KPI) as fully signed off despite unsigned certs.
+            if ($entry.Phase -eq 'SIGNED' -and $phase -ne 'SIGNED') {
+                $entry.Phase = $phase
+            }
+
+            # Use most recent sign-off date (the old code only filled a blank, keeping
+            # the FIRST cert's date forever).
+            if (-not [string]::IsNullOrWhiteSpace($signOffDate)) {
+                $newDt = $null; $curDt = $null
+                try { $newDt = [datetime]::Parse($signOffDate, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+                if (-not [string]::IsNullOrWhiteSpace($entry.SignOffDate)) {
+                    try { $curDt = [datetime]::Parse($entry.SignOffDate, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+                }
+                if ($null -eq $curDt -or ($null -ne $newDt -and $newDt -gt $curDt)) {
+                    $entry.SignOffDate = $signOffDate
+                }
             }
         }
     }
@@ -1605,8 +1630,26 @@ function Group-SPAuditRemediationProof {
 
         if ($null -eq $rawItem) { continue }
 
-        $decision = if ($null -ne $rawItem.decision) { [string]$rawItem.decision } else { '' }
-        if ($decision.ToUpperInvariant() -ne 'REVOKE') { continue }
+        # Unwrap nested decision shapes ({value:'REVOKE'}) and accept the same variant
+        # set as ConvertTo-SPCanonicalDecision. The old exact-'REVOKE' string match
+        # dropped REVOKED/DENY/REJECT/EXCEPTION and every nested shape ([string] of a
+        # nested object is '@{value=REVOKE}'), so the remediation-proof section could
+        # show 0 revoked items while the decisions section showed N.
+        $decision = ''
+        if ($null -ne $rawItem.PSObject.Properties['decision'] -and $null -ne $rawItem.decision) {
+            $rawDecision = $rawItem.decision
+            if ($rawDecision -is [string]) { $decision = $rawDecision }
+            else {
+                foreach ($prop in @('value', 'decision', 'type', 'name')) {
+                    if ($null -ne $rawDecision.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace([string]$rawDecision.$prop)) {
+                        $decision = [string]$rawDecision.$prop
+                        break
+                    }
+                }
+            }
+        }
+        if ((ConvertTo-SPCanonicalDecision -Decision $decision -Justification '') -ne 'Revoked') { continue }
 
         # Extract fields
         $identityName = ''
@@ -1947,7 +1990,11 @@ function Measure-SPAuditRubberStampRisk {
         Based on common auditor red flags:
 
         1. Decision velocity: items decided per minute. Flagged if >50 items in <60 seconds.
-        2. Approval-only rate: % of decisions that are APPROVE. Flagged if 100% across >10 items.
+        2. Approval-only rate: % of DECISIONS that are APPROVE. Flagged if 100% across >10
+           decided items. Pending items are excluded from the stream entirely -- they carry
+           no decision activity, and counting them both masked true 100%-approvers (diluted
+           denominator) and fabricated bulk-decision clusters from their shared campaign-
+           creation fallback timestamps.
         3. Bulk decision detection: clusters of identical decisions within 30-second windows.
         4. Response latency: time from campaign creation to first decision. Flagged if <1 minute.
 
@@ -1978,10 +2025,11 @@ function Measure-SPAuditRubberStampRisk {
         [object[]]$Certifications
     )
 
-    # Build a map of reviewer -> list of (decision, datetime) tuples
+    # Build a map of reviewer -> list of (decision, datetime) tuples.
+    # DECIDED items only (see .DESCRIPTION): Pending rows are not decisions.
     $reviewerDecisions = @{}
 
-    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+    foreach ($category in @('Approved', 'Revoked')) {
         if (-not $Decisions.ContainsKey($category) -or $null -eq $Decisions[$category]) { continue }
         $decisionLabel = $category  # Approved, Revoked, Pending
         foreach ($item in @($Decisions[$category])) {
@@ -3018,10 +3066,24 @@ function Measure-SPCampaignMetrics {
                     $totalItems++
                     $certItemCount++
 
+                    # Extract the decision the SAME way Group-SPAuditDecisions does,
+                    # including nested {value:'APPROVE'} shapes -- [string] of a nested
+                    # object is '@{value=APPROVE}', which the canonical classifier maps
+                    # to Pending and the KPI path reported 0% completion while the audit
+                    # report showed the same items approved.
                     $decision = ''
-                    if ($null -ne $item.PSObject.Properties['decision'] -and
-                        -not [string]::IsNullOrWhiteSpace($item.decision)) {
-                        $decision = [string]$item.decision
+                    if ($null -ne $item.PSObject.Properties['decision'] -and $null -ne $item.decision) {
+                        $rawDec = $item.decision
+                        if ($rawDec -is [string]) { $decision = $rawDec }
+                        else {
+                            foreach ($dprop in @('value', 'decision', 'type', 'name')) {
+                                if ($null -ne $rawDec.PSObject.Properties[$dprop] -and
+                                    -not [string]::IsNullOrWhiteSpace([string]$rawDec.$dprop)) {
+                                    $decision = [string]$rawDec.$dprop
+                                    break
+                                }
+                            }
+                        }
                     }
 
                     # Extract the justification the SAME way Group-SPAuditDecisions does

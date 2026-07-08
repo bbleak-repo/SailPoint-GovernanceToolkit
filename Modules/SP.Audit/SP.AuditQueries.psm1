@@ -2564,8 +2564,12 @@ function Get-SPSourceCampaignCoverage {
             if ($coverageData.ContainsKey($srcId) -and $coverageData[$srcId].Count -gt 0) {
                 $campList = @($coverageData[$srcId])
 
-                # Determine last campaign by date (string sort works for yyyy-MM-dd)
-                $sorted = @($campList | Sort-Object -Property CampaignDate -Descending)
+                # Determine last campaign by date (string sort works for yyyy-MM-dd).
+                # Scriptblock key: elements are HASHTABLES, and on PS 5.1
+                # Sort-Object -Property <name> cannot resolve hashtable keys -- every
+                # sort key was $null and insertion order won, so LastCampaign was
+                # whatever campaign happened to be enumerated first, not the latest.
+                $sorted = @($campList | Sort-Object -Property { $_['CampaignDate'] } -Descending)
                 $lastCamp     = $sorted[0].CampaignName
                 $lastCampDate = $sorted[0].CampaignDate
 
@@ -2892,8 +2896,18 @@ function Get-SPRemediationStatus {
                     }
                 }
 
-                # If no items to check, accept source-only match (best effort)
-                if (-not $sourceMatched -and -not $entitlementMatched) { continue }
+                # Match requirements:
+                #  - Event HAS activity items: the entitlement name must match. A
+                #    source-only match is not sufficient -- one REVOKE event on source
+                #    'AD' for SG-Finance would otherwise mark an unrelated SG-HR
+                #    revocation on the same source as Provisioned, hiding a
+                #    never-executed revoke from the Overdue/Failed buckets.
+                #  - Event has NO items (some connectors omit them): fall back to the
+                #    source-only match as best effort.
+                if ($null -ne $activityItems -and $activityItems.Count -gt 0) {
+                    if (-not $entitlementMatched) { continue }
+                }
+                elseif (-not $sourceMatched) { continue }
 
                 # Determine event completion status
                 $evtStatus = $null
@@ -5560,7 +5574,14 @@ function Get-SPSourceAggregationHealth {
 
         if ($null -ne $lastSuccessfulCompleted) {
             try {
-                $successDt = [datetime]::Parse($lastSuccessfulCompleted)
+                # Normalize to UTC before differencing against $now = [datetime]::UtcNow.
+                # [datetime]::Parse converts the ISC 'Z'-suffixed timestamp to LOCAL Kind,
+                # and the raw tick subtraction ignored Kind -- DataFreshnessHours was
+                # skewed by the machine's UTC offset (false IsStale on UTC-negative
+                # hosts, hidden staleness on UTC-positive ones).
+                $successDt = [datetime]::Parse([string]$lastSuccessfulCompleted,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
                 $dataFreshnessHours = [math]::Round(($now - $successDt).TotalHours, 1)
             } catch { }
         }
@@ -6328,7 +6349,13 @@ function Get-SPReviewerDelegations {
                     $reviewerStats[$assignedReviewer] = @{
                         Assigned    = 0
                         Reassigned  = 0
-                        DelegationTimestamps = [System.Collections.Generic.List[datetime]]::new()
+                        # Hours from the OWNING campaign's created date to the delegation --
+                        # computed at collection time (below), where this audit's
+                        # $campaignCreated is in scope. The metrics loop runs after the
+                        # audit loop and used to difference raw timestamps against the
+                        # loop-leaked LAST campaign's created date, skewing (or zeroing)
+                        # AvgHoursBeforeDelegation for every reviewer.
+                        DelegationHours = [System.Collections.Generic.List[double]]::new()
                     }
                 }
                 $reviewerStats[$assignedReviewer]['Assigned']++
@@ -6365,9 +6392,12 @@ function Get-SPReviewerDelegations {
                     } catch { $completedDate = $null }
                 }
 
-                # Estimate delegation timestamp (use completedDate as proxy)
-                if ($null -ne $completedDate) {
-                    $reviewerStats[$assignedReviewer]['DelegationTimestamps'].Add($completedDate)
+                # Estimate delegation lead time (completedDate as proxy) against THIS
+                # audit's campaign created date (both UTC-normalized).
+                if ($null -ne $completedDate -and $null -ne $campaignCreated) {
+                    $delegHours = ($completedDate - $campaignCreated).TotalHours
+                    if ($delegHours -lt 0) { $delegHours = 0.0 }
+                    $reviewerStats[$assignedReviewer]['DelegationHours'].Add([double]$delegHours)
                 }
 
                 # Build reassignment chain
@@ -6460,17 +6490,14 @@ function Get-SPReviewerDelegations {
         $reassigned = $rs['Reassigned']
         $rate = if ($assigned -gt 0) { [math]::Round(($reassigned / $assigned) * 100, 1) } else { 0.0 }
 
-        # Average hours before delegation
+        # Average hours before delegation -- per-delegation lead times were computed
+        # at collection time against each delegation's OWN campaign created date.
         $avgHours = 0.0
-        $timestamps = $rs['DelegationTimestamps']
-        if ($timestamps.Count -gt 0 -and $null -ne $campaignCreated) {
-            # Rough estimate: average time from campaign start to delegation
+        $delegHoursList = $rs['DelegationHours']
+        if ($delegHoursList.Count -gt 0) {
             $totalHours = 0.0
-            foreach ($ts in $timestamps) {
-                $totalHours += ($ts - $campaignCreated).TotalHours
-            }
-            $avgHours = [math]::Round($totalHours / $timestamps.Count, 1)
-            if ($avgHours -lt 0) { $avgHours = 0.0 }
+            foreach ($h in $delegHoursList) { $totalHours += [double]$h }
+            $avgHours = [math]::Round($totalHours / $delegHoursList.Count, 1)
         }
 
         $rPatterns = [System.Collections.Generic.List[string]]::new()
@@ -6943,7 +6970,7 @@ function Test-SPSourceOnboardingReadiness {
 # Session-scoped in-memory cache.  Survives multiple calls within one PS session;
 # cleared on module reload.  Backed by the disk cache for cross-session reuse.
 # ---------------------------------------------------------------------------
-$script:_ItemMemCache = @{}   # key: campaignId -> @{Items; CachedAt; Status}
+$script:_ItemMemCache = @{}   # key: "campaignId|cachePath" -> @{Items; CachedAt; Status}
 
 function ConvertTo-SPCertRosterEntry {
     # ---------------------------------------------------------------------------
@@ -7149,11 +7176,19 @@ function Get-SPCachedCampaignItems {
     $itemsFile    = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
     $metaFile     = Join-Path $effectiveCachePath "items-$safeCampId.meta.json"
 
+    # Memory-cache key includes the resolved cache path: the disk layer is
+    # per-directory, so a session mixing -CachePath values (e.g. a scratch cache
+    # vs the default) must not serve one directory's items for the other.
+    $memKey = "$campId|$($effectiveCachePath.ToLowerInvariant())"
+
     # ---------------------------------------------------------------------------
     # Layer 1: memory cache check
+    # -RefreshCache skips BOTH read layers (its contract is "skip read but DO
+    # write" -- without this, a valid cache hit returned early and a permanent
+    # COMPLETED campaign could never be refreshed at all).
     # ---------------------------------------------------------------------------
-    if (-not $NoCache -and $script:_ItemMemCache.ContainsKey($campId)) {
-        $memEntry = $script:_ItemMemCache[$campId]
+    if (-not $NoCache -and -not $RefreshCache -and $script:_ItemMemCache.ContainsKey($memKey)) {
+        $memEntry = $script:_ItemMemCache[$memKey]
         $memValid = $memEntry.IsPermanent -or
                     ((Get-Date) - $memEntry.CachedAt).TotalMinutes -lt $effectiveTtl
         if ($memValid) {
@@ -7173,9 +7208,9 @@ function Get-SPCachedCampaignItems {
     }
 
     # ---------------------------------------------------------------------------
-    # Layer 2: disk cache check
+    # Layer 2: disk cache check (-RefreshCache skips reads here too; see layer 1)
     # ---------------------------------------------------------------------------
-    if (-not $NoCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
+    if (-not $NoCache -and -not $RefreshCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
         try {
             $meta = Get-Content $metaFile -Raw | ConvertFrom-Json
             # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly on PS 5.1
@@ -7235,7 +7270,7 @@ function Get-SPCachedCampaignItems {
                     CertCount   = $meta.CertCount
                     IsPermanent = $meta.IsPermanent
                 }
-                $script:_ItemMemCache[$campId] = $memEntry2
+                $script:_ItemMemCache[$memKey] = $memEntry2
 
                 return @{
                     Success   = $true
@@ -7287,7 +7322,11 @@ function Get-SPCachedCampaignItems {
     # interrupted long pull resumes where it left off instead of restarting.
     $doneCertIds = @{}
     $resuming    = $false
-    if ($isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) {
+    # Resume only applies to a DEFAULT fetch. -NoCache promises fully fresh data
+    # (a leftover partial must not be silently blended in) and -RefreshCache
+    # promises a full re-pull that replaces whatever is on disk.
+    if (-not $NoCache -and -not $RefreshCache -and
+        $isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) {
         try {
             Get-Content $itemsFile | ForEach-Object {
                 if ([string]::IsNullOrWhiteSpace($_)) { return }
@@ -7312,6 +7351,9 @@ function Get-SPCachedCampaignItems {
     # -NoCache: skip read AND write (preserve existing cache for comparison)
     # -RefreshCache: skip read but DO write (replace cache with fresh data)
     $writeToCache = $isCacheable -and (-not $NoCache -or $RefreshCache)
+    # Sticky provenance captured from the outgoing meta BEFORE it is removed below;
+    # the finalize blocks use these instead of re-reading the (now deleted) file.
+    $priorMetaFirstSeen = $null; $priorMetaCapturedActive = $false; $priorMetaAvailable = $false
     if ($writeToCache) {
         try {
             if (-not (Test-Path $effectiveCachePath)) {
@@ -7319,6 +7361,24 @@ function Get-SPCachedCampaignItems {
             }
             if (-not $resuming -and (Test-Path $itemsFile)) {
                 [System.IO.File]::Delete($itemsFile)
+            }
+            # Remove the stale meta too when starting a fresh (non-resume) refetch.
+            # Leaving it on disk paired a mid-fetch-killed PARTIAL items file with a
+            # valid-looking meta: the next run's layer-2 check loaded the truncated
+            # set -- and if the campaign had completed meanwhile, seal-on-transition
+            # stamped the partial data permanent with no self-heal. Without the meta,
+            # an interrupted fetch leaves the standard items-without-meta partial
+            # signature, which the resume path already handles. Sticky provenance
+            # (FirstSeenStatus / CapturedWhileActive) is captured first.
+            if (-not $resuming -and (Test-Path $metaFile)) {
+                try {
+                    $pmSnap = Get-Content $metaFile -Raw | ConvertFrom-Json
+                    if ($null -ne $pmSnap.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pmSnap.FirstSeenStatus)) { $priorMetaFirstSeen = [string]$pmSnap.FirstSeenStatus }
+                    elseif ($null -ne $pmSnap.PSObject.Properties['Status'] -and -not [string]::IsNullOrWhiteSpace([string]$pmSnap.Status)) { $priorMetaFirstSeen = [string]$pmSnap.Status }
+                    if ($null -ne $pmSnap.PSObject.Properties['CapturedWhileActive']) { $priorMetaCapturedActive = [bool]$pmSnap.CapturedWhileActive }
+                    $priorMetaAvailable = $true
+                } catch { }
+                [System.IO.File]::Delete($metaFile)
             }
         } catch { }
     }
@@ -7417,24 +7477,34 @@ function Get-SPCachedCampaignItems {
     # When -NoCache was specified, skip writing back so the existing cache is preserved
     # for comparison or rollback. The fresh data is only used for this run.
     # ---------------------------------------------------------------------------
-    if ($NoCache) {
-        if ($RefreshCache) {
-            Write-Host "  [Cache] RefreshCache mode -- fresh data will overwrite existing cache." -ForegroundColor Cyan
-        }
-        else {
-            Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
-        }
+    if ($NoCache -and -not $RefreshCache) {
+        # Pure -NoCache: fresh data is used for this run only; disk cache untouched.
+        # (-NoCache -RefreshCache falls through to the write branches below so the
+        # meta sidecar is rewritten alongside the streamed items -- previously the
+        # combo left the OLD meta paired with the NEW items file, and the stale
+        # Status=ACTIVE meta made the seal-on-transition path stamp freshly fetched
+        # post-completion data as CapturedWhileActive.)
+        Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
     }
     elseif ($writeToCache -and $allItems.Count -gt 0) {
+        if ($RefreshCache) {
+            Write-Host "  [Cache] RefreshCache mode -- fresh data overwrote existing cache." -ForegroundColor Cyan
+        }
         try {
-            # WI-4 (G1): stamp capture-provenance onto the items meta. Recover a STICKY
-            # first-seen status from any prior meta still on disk (metaFile is only
-            # overwritten just below, so on a TTL/Refresh miss it is still present). When a
-            # COMPLETED campaign is first cached here WITHOUT a prior ACTIVE capture, the
-            # record is flagged Unverified so the report can warn that ISC post-completion
-            # data is being trusted without a sealed ACTIVE-state snapshot.
+            # WI-4 (G1): stamp capture-provenance onto the items meta. The STICKY
+            # first-seen status was captured from the outgoing meta BEFORE it was
+            # removed at fetch start (B5: the stale meta can no longer sit next to a
+            # partial items file); fall back to a disk read for paths that did not
+            # delete it (e.g. resume). When a COMPLETED campaign is first cached here
+            # WITHOUT a prior ACTIVE capture, the record is flagged Unverified so the
+            # report can warn that ISC post-completion data is being trusted without
+            # a sealed ACTIVE-state snapshot.
             $priorFirstSeen = $null; $priorCapturedActive = $false
-            if (Test-Path $metaFile) {
+            if ($priorMetaAvailable) {
+                $priorFirstSeen      = $priorMetaFirstSeen
+                $priorCapturedActive = $priorMetaCapturedActive
+            }
+            elseif (Test-Path $metaFile) {
                 try {
                     $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
                     if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
@@ -7487,10 +7557,15 @@ function Get-SPCachedCampaignItems {
             # Ensure an empty items file exists so the layer-2 (itemsFile AND metaFile) check HITs.
             [System.IO.File]::WriteAllText($itemsFile, '', $utf8NoBom)
 
-            # Recover a STICKY first-seen status from any prior meta (same logic as the
-            # >0-item finalize block) so a previously-ACTIVE seal stays VERIFIED.
+            # Recover a STICKY first-seen status (same logic as the >0-item finalize
+            # block): prefer the provenance captured before the meta was removed at
+            # fetch start, falling back to a disk read.
             $priorFirstSeen = $null; $priorCapturedActive = $false
-            if (Test-Path $metaFile) {
+            if ($priorMetaAvailable) {
+                $priorFirstSeen      = $priorMetaFirstSeen
+                $priorCapturedActive = $priorMetaCapturedActive
+            }
+            elseif (Test-Path $metaFile) {
                 try {
                     $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
                     if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
@@ -7533,13 +7608,19 @@ function Get-SPCachedCampaignItems {
         try { [System.IO.File]::Delete($itemsFile) } catch { }
     }
 
-    $memEntry3 = @{
-        Items       = $allItems.ToArray()
-        CachedAt    = Get-Date
-        CertCount   = $certs.Count
-        IsPermanent = $isPermanent
+    # Pure -NoCache promises the fresh data is "only used for this run" -- do not
+    # store it in the session memory cache either, or the next default call would
+    # serve this bypass fetch (marked permanent for COMPLETED campaigns) instead of
+    # the preserved honest disk cache.
+    if (-not ($NoCache -and -not $RefreshCache)) {
+        $memEntry3 = @{
+            Items       = $allItems.ToArray()
+            CachedAt    = Get-Date
+            CertCount   = $certs.Count
+            IsPermanent = $isPermanent
+        }
+        $script:_ItemMemCache[$memKey] = $memEntry3
     }
-    $script:_ItemMemCache[$campId] = $memEntry3
 
     return @{
         Success   = $true
@@ -7721,8 +7802,15 @@ function ConvertTo-SPSeriesChronoKey {
 
     # 1. Direct parse first (ISO date / datetime / month-year / numeric year-month).
     #    Skip for Quarterly/Weekly tokens which would mis-parse (e.g. 'Q1 2026' partials).
+    #    InvariantCulture FIRST: this key orders series instances (which instance is the
+    #    baseline / the newest), and campaign-name tokens like '6/7/2026' must sort the
+    #    same on every host. A current-culture parse on a dd/MM machine swaps month/day,
+    #    reorders the series, and the delta engine misclassifies the whole series.
+    #    Host culture remains as a fallback for locale-formatted names invariant can't read.
     if ($PeriodType -ne 'Quarterly' -and $PeriodType -ne 'Weekly') {
         $dt = [datetime]::MinValue
+        if ([datetime]::TryParse($tok, [System.Globalization.CultureInfo]::InvariantCulture,
+                                 [System.Globalization.DateTimeStyles]::None, [ref]$dt)) { return $dt }
         if ([datetime]::TryParse($tok, [ref]$dt)) { return $dt }
     }
 
@@ -8062,10 +8150,17 @@ function Clear-SPAuditItemCache {
             $clearedTargets += 'memory'
             Write-Host "  Memory cache cleared." -ForegroundColor DarkGray
         }
-        elseif ($script:_ItemMemCache.ContainsKey($CampaignId)) {
-            $script:_ItemMemCache.Remove($CampaignId)
-            $clearedTargets += "memory($CampaignId)"
-            Write-Host "  Memory cache cleared for $CampaignId." -ForegroundColor DarkGray
+        else {
+            # Keys are "campaignId|cachePath" (plus any legacy bare-id entries) --
+            # remove every entry for this campaign across all cache paths.
+            $toRemove = @($script:_ItemMemCache.Keys | Where-Object {
+                $_ -eq $CampaignId -or $_ -like "$CampaignId|*"
+            })
+            foreach ($k in $toRemove) { $script:_ItemMemCache.Remove($k) }
+            if ($toRemove.Count -gt 0) {
+                $clearedTargets += "memory($CampaignId)"
+                Write-Host "  Memory cache cleared for $CampaignId." -ForegroundColor DarkGray
+            }
         }
     }
 

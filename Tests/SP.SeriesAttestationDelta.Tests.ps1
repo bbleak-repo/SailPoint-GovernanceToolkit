@@ -91,7 +91,7 @@ BeforeAll {
             -Decision $Decision -Comment $Comment -ReviewedBy $ReviewedBy -DecisionDate $DecisionDate
     }
 
-    $script:JdoeKey = 'id-jdoe|ent-9001|src-ad'
+    $script:JdoeKey = 'id-jdoe|finance-rw|src-ad'   # name-based stable key (reassignment-proof)
     $script:Bob = [PSCustomObject]@{ name = 'Bob Boss'; id = 'rv-bob'; email = 'bob@x.io' }
 }
 
@@ -189,7 +189,7 @@ Describe 'SAD-05 NewlyInScope' {
             $newItem
         )
         $r = Get-SPSeriesAttestationDelta -Instances @($i1, $i2)
-        $rec = @($r.Data.Items) | Where-Object { $_.ItemKey -eq 'id-new|ent-7777|src-ad' }
+        $rec = @($r.Data.Items) | Where-Object { $_.ItemKey -eq 'id-new|hr-read|src-ad' }
         $rec | Should -Not -BeNullOrEmpty
         $rec.IsNewlyInScope | Should -BeTrue
         $rec.Classification | Should -Be 'NewlyInScope'
@@ -268,7 +268,7 @@ Describe 'SAD-08 reviewer rollups (roster attribution + deterministic sort)' {
         $pu[0].ReviewerName | Should -Be 'Carol Cert'
         $pu[0].ReviewerId   | Should -Be 'rv-carol'
         $pu[0].Count        | Should -Be 1
-        @($pu[0].Items)[0].ItemKey | Should -Be 'id-2|ent-2|src-ad'
+        @($pu[0].Items)[0].ItemKey | Should -Be 'id-2|g2|src-ad'
     }
 
     It 'sorts reviewer clusters by ReviewerName then ReviewerId' {
@@ -283,8 +283,8 @@ Describe 'SAD-08 reviewer rollups (roster attribution + deterministic sort)' {
         # roster; so simulate via two separate newest certs is not possible in a single instance. Instead
         # attribute both via one newest roster carrying both certs is also not possible (cert is per-item).
         # Simplify: use pre-resolved ItemStates to set the current reviewer directly.
-        $sx = [PSCustomObject]@{ ItemKey = 'id-x|ent-x|src-ad'; IdentityId='id-x'; IdentityName='X'; AccessId='ent-x'; AccessName='GX'; AccessType='ENTITLEMENT'; SourceId='src-ad'; SourceName='AD'; CertificationId='cz'; RawDecision=''; HonestDecision='Undecided'; IsGenuineApproval=$false; IsGenuineDecision=$false; IsAutoApproved=$false; DecisionDate=''; ReviewerId='rv-z'; ReviewerName='Zeb'; ReviewerEmail='z@x.io'; ReviewerSource='roster'; Unverified=$false }
-        $sy = [PSCustomObject]@{ ItemKey = 'id-y|ent-y|src-ad'; IdentityId='id-y'; IdentityName='Y'; AccessId='ent-y'; AccessName='GY'; AccessType='ENTITLEMENT'; SourceId='src-ad'; SourceName='AD'; CertificationId='ca'; RawDecision=''; HonestDecision='Undecided'; IsGenuineApproval=$false; IsGenuineDecision=$false; IsAutoApproved=$false; DecisionDate=''; ReviewerId='rv-a'; ReviewerName='Amy'; ReviewerEmail='a@x.io'; ReviewerSource='roster'; Unverified=$false }
+        $sx = [PSCustomObject]@{ ItemKey = 'id-x|gx|src-ad'; IdentityId='id-x'; IdentityName='X'; AccessId='ent-x'; AccessName='GX'; AccessType='ENTITLEMENT'; SourceId='src-ad'; SourceName='AD'; CertificationId='cz'; RawDecision=''; HonestDecision='Undecided'; IsGenuineApproval=$false; IsGenuineDecision=$false; IsAutoApproved=$false; DecisionDate=''; ReviewerId='rv-z'; ReviewerName='Zeb'; ReviewerEmail='z@x.io'; ReviewerSource='roster'; Unverified=$false }
+        $sy = [PSCustomObject]@{ ItemKey = 'id-y|gy|src-ad'; IdentityId='id-y'; IdentityName='Y'; AccessId='ent-y'; AccessName='GY'; AccessType='ENTITLEMENT'; SourceId='src-ad'; SourceName='AD'; CertificationId='ca'; RawDecision=''; HonestDecision='Undecided'; IsGenuineApproval=$false; IsGenuineDecision=$false; IsAutoApproved=$false; DecisionDate=''; ReviewerId='rv-a'; ReviewerName='Amy'; ReviewerEmail='a@x.io'; ReviewerSource='roster'; Unverified=$false }
         $i2 = @{ OrderIndex = 2; CampaignId = 'cnew'; CampaignName = 'C-new'; Status = 'COMPLETED'; Unverified = $false; ItemStates = @($sx, $sy) }
         $r = Get-SPSeriesAttestationDelta -Instances @($i1, $i2)
         $pu = @($r.Data.PersistentlyUndecidedByReviewer)

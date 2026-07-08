@@ -110,6 +110,49 @@ function Test-SPGrantPrivileged {
 
 #region Public: build + persist
 
+function Get-SPStableScopeKey {
+    <#
+    .SYNOPSIS
+        Composes the reassignment-stable scope key for a snapshot/diff item:
+        IdentityId | AccessName (lowercased; AccessId only when the name is blank) | SourceId-else-SourceName.
+    .DESCRIPTION
+        The scope key identifies a GRANT (who | what | where) across campaign instances,
+        so it must survive certification reassignment. ISC regenerates item/access IDs when
+        a certification is reassigned to a new reviewer (observed as AccessId churn by
+        Invoke-SPCacheDiagnostic's cross-campaign check), so the previous AccessId-first key
+        made the SAME grant look Removed+Added between captures -- and a decision on it
+        reported as "newly approved"/"newly in scope". The user's primary key (IdentityId)
+        and the entitlement's name+source are stable across reassignment, so the NAME wins
+        over AccessId here; AccessId is only the fallback discriminator for blank names.
+        Source IDs are genuinely immutable and still win over source names.
+
+        Trade-off (accepted by design): an entitlement RENAME churns the key once
+        (shows as removed+added in a single diff), and two same-named entitlements on one
+        source held by one identity collapse to one key.
+    .OUTPUTS
+        [string] 'identity|access|source' -- '' when identity AND access are both blank.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string]$IdentityId,
+        [string]$AccessName,
+        [string]$AccessId,
+        [string]$SourceId,
+        [string]$SourceName
+    )
+    $idPart = ([string]$IdentityId).Trim()
+    $accessPart =
+        if (-not [string]::IsNullOrWhiteSpace($AccessName)) { ([string]$AccessName).Trim().ToLowerInvariant() }
+        elseif (-not [string]::IsNullOrWhiteSpace($AccessId)) { ([string]$AccessId).Trim() }
+        else { '' }
+    if ([string]::IsNullOrWhiteSpace($idPart) -and [string]::IsNullOrWhiteSpace($accessPart)) { return '' }
+    $sourcePart =
+        if (-not [string]::IsNullOrWhiteSpace($SourceId)) { ([string]$SourceId).Trim() }
+        else { ([string]$SourceName).Trim().ToLowerInvariant() }
+    return ('{0}|{1}|{2}' -f $idPart, $accessPart, $sourcePart)
+}
+
 function Build-SPCampaignSnapshotData {
     <#
     .SYNOPSIS
@@ -204,12 +247,11 @@ function Build-SPCampaignSnapshotData {
             $privInfo = Test-SPGrantPrivileged -Decision $d -Patterns $patterns
             $priv     = [bool]$privInfo.Privileged
             $privSrc  = [string]$privInfo.Source
-            # Stable scope key: prefer immutable IDs (entitlement/source) so an entitlement or
-            # source RENAME doesn't churn as remove+add; fall back to names when IDs absent.
-            $keyAccess = if (-not [string]::IsNullOrWhiteSpace($accId)) { $accId } else { $access }
-            $keySource = if (-not [string]::IsNullOrWhiteSpace($srcId)) { $srcId } else { $src }
+            # Reassignment-stable scope key: identity + access NAME + source. ISC
+            # regenerates access ids on reviewer reassignment, so the old AccessId-first
+            # key churned the same grant into remove+add (see Get-SPStableScopeKey).
             $items.Add([ordered]@{
-                Key             = "$idId|$keyAccess|$keySource"
+                Key             = (Get-SPStableScopeKey -IdentityId $idId -AccessName $access -AccessId $accId -SourceId $srcId -SourceName $src)
                 IdentityId      = $idId
                 IdentityName    = [string]$d.IdentityName
                 AccessName      = $access
@@ -798,6 +840,7 @@ function Test-SPCampaignSnapshotIntegrity {
 #endregion
 
 Export-ModuleMember -Function @(
+    'Get-SPStableScopeKey',
     'Build-SPCampaignSnapshotData',
     'Save-SPCampaignSnapshot',
     'Get-SPCampaignSnapshot',

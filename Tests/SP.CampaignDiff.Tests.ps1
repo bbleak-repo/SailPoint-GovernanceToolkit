@@ -76,12 +76,12 @@ Describe "CDF-01: Completion view" {
 Describe "CDF-02: Scope view" {
     It "Detects added grants (Eve/Domain Admins is new)" {
         $addedKeys = @($script:diff.Scope.Added | ForEach-Object { $_.Key })
-        $addedKeys | Should -Contain 'id-5|Domain Admins|AD'
+        $addedKeys | Should -Contain 'id-5|domain admins|ad'
         $script:diff.Scope.AddedPrivilegedCount | Should -Be 1
     }
     It "Detects removed grants (Carol/App-Reader is gone)" {
         $removedKeys = @($script:diff.Scope.Removed | ForEach-Object { $_.Key })
-        $removedKeys | Should -Contain 'id-3|App-Reader|AD'
+        $removedKeys | Should -Contain 'id-3|app-reader|ad'
     }
 }
 
@@ -93,8 +93,8 @@ Describe "CDF-03: Compliance summary" {
     It "Flags persistently-pending (pending in both captures)" {
         # Bob/VPN-Standard and Dave/Legacy-App were pending yesterday and still pending today
         $keys = @($script:diff.Compliance.PersistentlyPending | ForEach-Object { $_.Key })
-        $keys | Should -Contain 'id-2|VPN-Standard|Okta'
-        $keys | Should -Contain 'id-4|Legacy-App|AD'
+        $keys | Should -Contain 'id-2|vpn-standard|okta'
+        $keys | Should -Contain 'id-4|legacy-app|ad'
     }
     It "Flags privileged approved as advisory (Domain Admins newly approved)" {
         @($script:diff.Compliance.PrivilegedApproved).Count | Should -Be 1

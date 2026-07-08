@@ -767,9 +767,17 @@ foreach ($sd in $seriesDataList) {
         PersistentlyUndecided  = 0
         OtherDecided           = 0
     }
+    # Coverage denominator input: count the INDEPENDENT IsPersistentlyUndecided fact in
+    # the same pass. The Classification precedence ladder masks it -- an item that has
+    # never been genuinely decided but is new in the latest instance classifies as
+    # NewlyInScope, so subtracting only Classification=='PersistentlyUndecided' counted
+    # brand-new undecided entitlements as "genuinely attested" (10 new undecided items
+    # could render '100% genuinely attested').
+    $cUndecidedFact = 0
     foreach ($it in $shownItems) {
         $cls = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
         if ($clsCounts.Contains($cls)) { $clsCounts[$cls] = [int]$clsCounts[$cls] + 1 }
+        if ([bool](Get-SPObjectProperty -Object $it -Name 'IsPersistentlyUndecided' -Default $false)) { $cUndecidedFact++ }
     }
     $cNA = [int]$clsCounts['NewlyAttested']
     $cAA = [int]$clsCounts['AlreadyAttestedEarlier']
@@ -804,7 +812,9 @@ foreach ($sd in $seriesDataList) {
 
     # Attestation-coverage VISUAL panel (mirrors V4b's removal-status panel: big %, bar, labels)
     # in place of the dropped per-campaign removal status; series-rebound.
-    $covered = $shownTotal - $cPU
+    # 'Genuinely attested' = has at least one genuine (non-auto-approved) decision anywhere
+    # in the series: subtract the independent undecided FACT, not the masked classification.
+    $covered = $shownTotal - $cUndecidedFact
     $covPct = if ($shownTotal -gt 0) { [int][math]::Round($covered / $shownTotal * 100) } else { 0 }
     $undPct = 100 - $covPct
     $covColor = if ($covPct -ge 80) { '#339933' } elseif ($covPct -ge 50) { '#9a6700' } else { '#CC3333' }

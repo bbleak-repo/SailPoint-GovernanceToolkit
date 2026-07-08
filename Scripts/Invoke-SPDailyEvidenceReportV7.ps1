@@ -430,20 +430,44 @@ foreach ($rec in $allRecords) {
 # Step 2b: Calendar-day grouping
 # Group all records by calendar date (captureDate)
 # Resolution: prefer ACTIVE over COMPLETED, then latest captureTimestamp
-$dateGroups = [ordered]@{}
+#
+# Suspect handling: a suspect (post-completion inflated) record is dropped only
+# when the SAME calendar day also has a non-suspect capture -- the honest record
+# wins. A day whose ONLY evidence is suspect keeps its records, flagged
+# IsSuspect (rendered dashed in charts), instead of silently vanishing. The
+# COMPLETED+pending=0+~100% signature is indistinguishable from a campaign that
+# genuinely finished, so unconditionally skipping those records deleted every
+# legitimately-completed day from the report -- and when ALL days in the window
+# had completed, the run died with 'No calendar days resolved' (exit 5).
+$allDateGroups = [ordered]@{}
 foreach ($rec in $allRecords) {
     $calDate = [string]$rec.captureDate
     if ([string]::IsNullOrWhiteSpace($calDate)) { continue }
-
-    # Skip suspect records unless -IncludeSuspect is set
-    $isSusp = $false
-    try { $isSusp = [bool]$rec._isSuspect } catch { }
-    if ($isSusp -and -not $IncludeSuspect) { continue }
-
-    if (-not $dateGroups.Contains($calDate)) {
-        $dateGroups[$calDate] = [System.Collections.Generic.List[object]]::new()
+    if (-not $allDateGroups.Contains($calDate)) {
+        $allDateGroups[$calDate] = [System.Collections.Generic.List[object]]::new()
     }
-    $dateGroups[$calDate].Add($rec)
+    $allDateGroups[$calDate].Add($rec)
+}
+
+$dateGroups = [ordered]@{}
+$suspectOnlyDays = 0
+foreach ($dateKey in $allDateGroups.Keys) {
+    $recs = $allDateGroups[$dateKey]
+    $kept = $recs
+    if (-not $IncludeSuspect) {
+        $nonSuspect = [System.Collections.Generic.List[object]]::new()
+        foreach ($r in $recs) {
+            $isSusp = $false
+            try { $isSusp = [bool]$r._isSuspect } catch { }
+            if (-not $isSusp) { $nonSuspect.Add($r) }
+        }
+        if ($nonSuspect.Count -gt 0) { $kept = $nonSuspect }
+        else { $suspectOnlyDays++ }   # keep the suspect records; day stays flagged
+    }
+    if ($kept.Count -gt 0) { $dateGroups[$dateKey] = $kept }
+}
+if ($suspectOnlyDays -gt 0) {
+    Write-Host "    NOTE: $suspectOnlyDays day(s) have only suspect (post-completion) captures -- kept and flagged IsSuspect." -ForegroundColor Yellow
 }
 
 # Step 2c: Resolve one record per calendar day
@@ -1308,14 +1332,21 @@ if ($dayCount -ge 2) {
         [void]$sb.AppendLine("<th style='text-align:right;'>Decided +/-</th><th style='text-align:right;'>Completion +/-</th>")
         [void]$sb.AppendLine("</tr></thead><tbody>")
 
-        $cumAppr = 0; $cumRev = 0; $cumPend = 0; $cumTotal = 0
+        # Total/Approved/Revoked/Pending are SNAPSHOT totals per day. The TOTALS row
+        # aggregates the LATEST snapshot per distinct campaign -- summing every day's
+        # snapshot multiply-counted items whenever one campaign spanned several days
+        # (a 100-item campaign observed 5 days rendered 'TOTALS: 500 items' with a %
+        # computed over the inflated denominator).
+        $latestByCampaign = [ordered]@{}
         foreach ($d in $dailyData) {
             $dAppr = [int]$d.Approved
             $dRev  = [int]$d.Revoked
             $dPend = [int]$d.Pending
             $dTotal = [int]$d.Total
             $dComp = [double]$d.CompletionPct
-            $cumAppr += $dAppr; $cumRev += $dRev; $cumPend += $dPend; $cumTotal += $dTotal
+            $cumCid = [string]$d.CampaignId
+            if ([string]::IsNullOrWhiteSpace($cumCid)) { $cumCid = [string]$d.CampaignName }
+            $latestByCampaign[$cumCid] = $d   # dailyData is date-ascending; last write wins
 
             $campFull = ConvertTo-SPHtmlSafe $d.CampaignName
             $statusLabel = [string]$d.CampaignStatus
@@ -1358,10 +1389,17 @@ if ($dayCount -ge 2) {
             [void]$sb.AppendLine("</tr>")
         }
 
-        # Totals row
+        # Totals row: latest snapshot per distinct campaign (see above)
+        $cumAppr = 0; $cumRev = 0; $cumPend = 0; $cumTotal = 0
+        foreach ($cd in $latestByCampaign.Values) {
+            $cumAppr  += [int]$cd.Approved
+            $cumRev   += [int]$cd.Revoked
+            $cumPend  += [int]$cd.Pending
+            $cumTotal += [int]$cd.Total
+        }
         $cumDecPct = if ($cumTotal -gt 0) { [math]::Round(($cumAppr + $cumRev) / $cumTotal * 100, 0) } else { 0 }
         [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'>")
-        [void]$sb.AppendLine("<td colspan='3'>TOTALS ($dayCount days)</td>")
+        [void]$sb.AppendLine("<td colspan='3'>TOTALS ($dayCount days, $($latestByCampaign.Count) campaign(s))</td>")
         [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $cumTotal)</td>")
         [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $cumAppr)</td>")
         [void]$sb.AppendLine("<td style='text-align:right;color:$($colors.Red);'>$('{0:N0}' -f $cumRev)</td>")
