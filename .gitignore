@@ -14,6 +14,8 @@ GovernanceToolkit_*.json
 
 # Vault data (encrypted credentials)
 Data/*.enc
+# ScheduledVault per-install DPAPI-protected secret (machine/user-bound, never commit)
+Data/.sv-secret
 
 # Local config overrides (per-developer, not for commit)
 Config/*.local.json

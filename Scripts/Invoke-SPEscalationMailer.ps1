@@ -501,8 +501,11 @@ foreach ($row in $filteredRows) {
     if ($effectiveUseSsl) { $mailParams['UseSsl'] = $true }
     if ($Credential) { $mailParams['Credential'] = $Credential }
 
-    # Send
+    # Send -- belt-and-suspenders gate: ShouldProcess returns $false under -WhatIf, so even if the
+    # Step-6 early-exit (which already simulates + exits in WhatIf mode) is ever changed, no mail can
+    # be sent OR logged as Sent while in WhatIf/simulate mode. Sending only happens when NOT -WhatIf.
     try {
+        if (-not $PSCmdlet.ShouldProcess($managerEmail, 'Send escalation email')) { continue }
         Send-MailMessage @mailParams
         Write-Host "  Sent to $managerEmail (level$rowLevel, $reviewerCount reviewer(s)) -- $htmlFile" -ForegroundColor Green
         Write-SPLog -Message "Email sent to $managerEmail (level$rowLevel, $reviewerCount reviewer(s), file=$htmlFile)" `

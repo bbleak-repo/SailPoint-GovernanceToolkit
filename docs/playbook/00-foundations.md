@@ -292,39 +292,51 @@ Then set `Authentication.Mode = "DpapiCredential"`. The credential file is creat
 > **When to use:** when your EDR team approves DPAPI-based credential storage, or in
 > environments without aggressive endpoint monitoring. Simplest automation setup.
 
-### 5.5 ScheduledVault (automation option B -- no DPAPI)
+### 5.5 ScheduledVault (automation option B -- machine-bound key, DPAPI optional)
 
-Uses the toolkit's **own AES-256-CBC encryption** (same crypto as the vault) to store
-the vault passphrase encrypted with a **machine-derived key**. No DPAPI involved --
-no Mimikatz/EDR concerns. Requires the regular vault (§5.3) to be set up first.
+Stores the vault passphrase encrypted with a **machine-derived key** using the toolkit's own
+AES-256-CBC crypto (same as the vault). The key mixes in a **per-install random secret** so it is
+**not derivable** from public machine, user, and domain values. Requires the regular vault (§5.3) first.
+
+> **Important (this was a security gap):** earlier versions derived the key purely from a SHA-256 of
+> machine, user, domain, and a salt shipped in the repo -- all *public* values. Anyone who copied the
+> key file and the vault file could recompute the key and **decrypt offline on any machine**. The
+> per-install secret closes that hole.
 
 ```powershell
 # Step 1: Set up the regular vault first (if not already done)
 .\Scripts\New-SPVault.ps1 -Mode Vault
 
-# Step 2: Create the scheduled key (prompts for the vault passphrase to verify it)
+# Step 2: Create the scheduled key (recommended: DPAPI-protected secret -- the default)
 .\Scripts\New-SPVault.ps1 -Mode ScheduledVault
+
+#   ...or EDR-quiet (no DPAPI):
+.\Scripts\New-SPVault.ps1 -Mode ScheduledVault -KeyProtection AclFile
 ```
 
-Then set `Authentication.Mode = "ScheduledVault"`. The encrypted key is created at
-`Authentication.ScheduledVault.KeyPath` (default `.\Data\sp-scheduled-key.enc`).
+Then set `Authentication.Mode = "ScheduledVault"`. The key is at
+`Authentication.ScheduledVault.KeyPath` (default `.\Data\sp-scheduled-key.enc`); the per-install
+secret is at `.\Data\.sv-secret` (gitignored -- never commit it).
 
 **How it works:**
-1. Your vault passphrase is encrypted using AES-256-CBC + PBKDF2 (same as the vault)
-2. The encryption key is derived from `SHA-256(MachineName|UserName|DomainName|static-salt)`
-3. At runtime, the machine identity is reconstructed, the passphrase is decrypted, and
-   the regular vault is opened -- no human input needed
-4. If the key file is copied to another machine/user, decryption fails (different identity)
+1. Your vault passphrase is encrypted with AES-256-CBC + PBKDF2 (same as the vault)
+2. The encryption key is a SHA-256 over machine, user, domain, a static salt, AND the per-install secret
+3. At runtime the key is reconstructed, the passphrase is decrypted, and the vault opens -- no human input
+4. Copying the files to another machine or user fails to decrypt (different identity; and in Dpapi mode the secret itself will not unprotect off-box)
 
-**Security properties:**
-- Uses the same AES-256-CBC + HMAC-SHA256 crypto as the vault -- no DPAPI
-- Key is derived from machine identity -- not extractable by Mimikatz
-- No EDR/endpoint protection alerts
-- Requires the regular vault to be set up first (two-layer security)
+**Key-protection modes** (`-KeyProtection`, or `Authentication.ScheduledVault.KeyProtection`):
 
-> **When to use:** when your SOC/EDR team prohibits DPAPI or you want zero endpoint
-> monitoring alerts. Slightly more setup (two steps) but cleanest from a security tooling
-> perspective.
+| Mode | How the per-install secret is stored | Off-box decryption if every file is exfiltrated? | EDR / SOC |
+|---|---|---|---|
+| **`Dpapi`** (default, recommended) | DPAPI-protected (CurrentUser) | No -- DPAPI will not unprotect off the box or user | ProtectedData calls may be flagged |
+| **`AclFile`** (EDR-quiet) | Raw random blob in an NTFS-ACL-locked file (no DPAPI) | Possible -- if the attacker can also read the ACL-locked secret file | No DPAPI, so no endpoint alerts |
+
+Both are far stronger than the old public-only key. **Prefer `Dpapi`** unless your SOC/EDR team
+prohibits DPAPI; in that case `AclFile` still removes the "derivable from the repo" weakness while
+staying endpoint-quiet -- just keep the secret file's ACLs sound.
+
+> **Note:** `DpapiCredential` (§5.4) remains the simplest genuinely-secure unattended mode. Use
+> ScheduledVault when you specifically want the AES-vault plus machine-binding model.
 
 ### 5.3.1 Choosing an automation mode
 
@@ -333,7 +345,7 @@ Then set `Authentication.Mode = "ScheduledVault"`. The encrypted key is created 
 | **ConfigFile** | Edit JSON | No | No | None | Dev/mock only (secret in plain text) |
 | **Vault** | `New-SPVault.ps1` | YES (interactive) | No | None | Interactive use, demos |
 | **DpapiCredential** | `New-SPVault.ps1 -Mode DpapiCredential` | No | YES | Mimikatz-flaggable | Automation with EDR approval |
-| **ScheduledVault** | `New-SPVault.ps1 -Mode ScheduledVault` | No | No | None | Automation without EDR concerns |
+| **ScheduledVault** | `New-SPVault.ps1 -Mode ScheduledVault [-KeyProtection Dpapi/AclFile]` | No | Optional | Dpapi: flaggable / AclFile: none | Automation; machine-bound AES vault |
 | **BrowserToken** | F12 copy-paste | No (expires in ~12 min) | No | None | Quick one-off queries |
 
 For **scheduled tasks** (Task Scheduler, cron), use `DpapiCredential` or `ScheduledVault`.

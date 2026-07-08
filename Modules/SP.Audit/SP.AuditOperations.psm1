@@ -2122,11 +2122,13 @@ function Save-SPGovernanceMetrics {
         if ($keptLines.Count -gt 0) { $content += "`n" }
         [System.IO.File]::WriteAllText($tmpPath, $content, $utf8NoBom)
 
-        # Atomic rename
+        # Atomic replace: no Remove-then-Move gap that could lose the file on crash.
         if (Test-Path -Path $filePath) {
-            Remove-Item -Path $filePath -Force
+            [System.IO.File]::Replace($tmpPath, $filePath, [NullString]::Value)
         }
-        Move-Item -Path $tmpPath -Destination $filePath -Force
+        else {
+            Move-Item -Path $tmpPath -Destination $filePath -Force
+        }
     }
     catch {
         # Clean up tmp on failure
@@ -2358,7 +2360,13 @@ function Get-SPGovernanceMetricsTrend {
                 $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
                 $weekNum = $cal.GetWeekOfYear($Dt, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek,
                     [System.DayOfWeek]::Monday)
-                return "$($Dt.ToString('yyyy'))-W$($weekNum.ToString('D2'))"
+                # ISO week-numbering YEAR (see SP.GovernanceTrendQuery._TQ_GetPeriodKey): pairing the
+                # week number with $Dt.Year collides across the year boundary. Apply the standard
+                # Dec/Jan correction (PS 5.1 has no [ISOWeek]).
+                $weekYear = $Dt.Year
+                if ($weekNum -ge 52 -and $Dt.Month -eq 1)     { $weekYear = $Dt.Year - 1 }
+                elseif ($weekNum -eq 1 -and $Dt.Month -eq 12)  { $weekYear = $Dt.Year + 1 }
+                return "$($weekYear.ToString('D4'))-W$($weekNum.ToString('D2'))"
             }
             'Monthly' { return $Dt.ToString('yyyy-MM') }
         }
@@ -2418,9 +2426,12 @@ function Get-SPGovernanceMetricsTrend {
             $changePct = [math]::Round(($totalChange / [math]::Abs($firstPeriodAvg)) * 100, 1)
         }
 
+        # "Lower is better" metrics (stale access, at-risk reviewers, overdue campaigns) invert the
+        # Improving/Declining label -- a RISE in these is a DECLINE in governance posture.
+        $lowerIsBetter = (([string]$metricName).ToLowerInvariant() -match 'stale|atrisk|overdue')
         $direction = 'Stable'
-        if ($changePct -gt 2)  { $direction = 'Improving' }
-        if ($changePct -lt -2) { $direction = 'Declining' }
+        if ($changePct -gt 2)      { $direction = if ($lowerIsBetter) { 'Declining' } else { 'Improving' } }
+        elseif ($changePct -lt -2) { $direction = if ($lowerIsBetter) { 'Improving' } else { 'Declining' } }
 
         $trends[$metricName] = @{
             Periods          = @($periods)
