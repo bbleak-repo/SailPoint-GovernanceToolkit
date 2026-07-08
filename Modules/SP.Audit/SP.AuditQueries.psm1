@@ -2892,8 +2892,18 @@ function Get-SPRemediationStatus {
                     }
                 }
 
-                # If no items to check, accept source-only match (best effort)
-                if (-not $sourceMatched -and -not $entitlementMatched) { continue }
+                # Match requirements:
+                #  - Event HAS activity items: the entitlement name must match. A
+                #    source-only match is not sufficient -- one REVOKE event on source
+                #    'AD' for SG-Finance would otherwise mark an unrelated SG-HR
+                #    revocation on the same source as Provisioned, hiding a
+                #    never-executed revoke from the Overdue/Failed buckets.
+                #  - Event has NO items (some connectors omit them): fall back to the
+                #    source-only match as best effort.
+                if ($null -ne $activityItems -and $activityItems.Count -gt 0) {
+                    if (-not $entitlementMatched) { continue }
+                }
+                elseif (-not $sourceMatched) { continue }
 
                 # Determine event completion status
                 $evtStatus = $null

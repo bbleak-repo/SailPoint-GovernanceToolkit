@@ -79,8 +79,9 @@ function Get-SPRevocationDisposition {
         [string]$SourceType,
         [string]$SourceName
     )
-    $dec = if ($null -ne $Decision) { ([string]$Decision).ToUpperInvariant() } else { '' }
-    if ($dec -ne 'REVOKE') {
+    # Canonical Revoked test so decision variants (REVOKED/DENY/REJECT/EXCEPTION)
+    # classify like plain REVOKE instead of falling to 'NA'.
+    if ((ConvertTo-SPCanonicalDecision -Decision $Decision -Justification '') -ne 'Revoked') {
         return [PSCustomObject]@{ Disposition = 'NA'; Label = 'N/A'; IsRemoved = $false; IsQueued = $false; IsPending = $false; IsConnectedAD = $false }
     }
     $isAD = Test-SPConnectedADSource -SourceType $SourceType -SourceName $SourceName
@@ -925,7 +926,10 @@ function Group-SPAuditDecisions {
         $remediationStatus = 'N/A'
         $remediationDate   = ''
         $isCompleted       = $false
-        if ($decision.ToUpperInvariant() -eq 'REVOKE') {
+        # Canonical Revoked test (not exact 'REVOKE') so REVOKED/DENY/REJECT/EXCEPTION
+        # variants get a remediation status too -- keeps this column consistent with
+        # the bucket the same item lands in.
+        if ((ConvertTo-SPCanonicalDecision -Decision $decision -Justification '') -eq 'Revoked') {
             if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['completed'] -and
                 $null -ne $rawItem.completed) {
                 try { $isCompleted = [bool]$rawItem.completed } catch { $isCompleted = $false }
@@ -1605,8 +1609,26 @@ function Group-SPAuditRemediationProof {
 
         if ($null -eq $rawItem) { continue }
 
-        $decision = if ($null -ne $rawItem.decision) { [string]$rawItem.decision } else { '' }
-        if ($decision.ToUpperInvariant() -ne 'REVOKE') { continue }
+        # Unwrap nested decision shapes ({value:'REVOKE'}) and accept the same variant
+        # set as ConvertTo-SPCanonicalDecision. The old exact-'REVOKE' string match
+        # dropped REVOKED/DENY/REJECT/EXCEPTION and every nested shape ([string] of a
+        # nested object is '@{value=REVOKE}'), so the remediation-proof section could
+        # show 0 revoked items while the decisions section showed N.
+        $decision = ''
+        if ($null -ne $rawItem.PSObject.Properties['decision'] -and $null -ne $rawItem.decision) {
+            $rawDecision = $rawItem.decision
+            if ($rawDecision -is [string]) { $decision = $rawDecision }
+            else {
+                foreach ($prop in @('value', 'decision', 'type', 'name')) {
+                    if ($null -ne $rawDecision.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace([string]$rawDecision.$prop)) {
+                        $decision = [string]$rawDecision.$prop
+                        break
+                    }
+                }
+            }
+        }
+        if ((ConvertTo-SPCanonicalDecision -Decision $decision -Justification '') -ne 'Revoked') { continue }
 
         # Extract fields
         $identityName = ''
@@ -3018,10 +3040,24 @@ function Measure-SPCampaignMetrics {
                     $totalItems++
                     $certItemCount++
 
+                    # Extract the decision the SAME way Group-SPAuditDecisions does,
+                    # including nested {value:'APPROVE'} shapes -- [string] of a nested
+                    # object is '@{value=APPROVE}', which the canonical classifier maps
+                    # to Pending and the KPI path reported 0% completion while the audit
+                    # report showed the same items approved.
                     $decision = ''
-                    if ($null -ne $item.PSObject.Properties['decision'] -and
-                        -not [string]::IsNullOrWhiteSpace($item.decision)) {
-                        $decision = [string]$item.decision
+                    if ($null -ne $item.PSObject.Properties['decision'] -and $null -ne $item.decision) {
+                        $rawDec = $item.decision
+                        if ($rawDec -is [string]) { $decision = $rawDec }
+                        else {
+                            foreach ($dprop in @('value', 'decision', 'type', 'name')) {
+                                if ($null -ne $rawDec.PSObject.Properties[$dprop] -and
+                                    -not [string]::IsNullOrWhiteSpace([string]$rawDec.$dprop)) {
+                                    $decision = [string]$rawDec.$dprop
+                                    break
+                                }
+                            }
+                        }
                     }
 
                     # Extract the justification the SAME way Group-SPAuditDecisions does
