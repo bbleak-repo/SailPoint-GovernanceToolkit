@@ -193,7 +193,7 @@ if ($Mode -eq 'Vault') {
         $VaultPath = $config.Authentication.Vault.VaultPath
     }
     if (-not [System.IO.Path]::IsPathRooted($VaultPath)) {
-        $VaultPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $VaultPath.TrimStart('.\').TrimStart('./')))
+        $VaultPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot ($VaultPath -replace '^\.[\\/]', '')))
     }
 
     $credentialKey = $config.Authentication.Vault.CredentialKey
@@ -403,7 +403,7 @@ elseif ($Mode -eq 'DpapiCredential') {
     }
     if (-not [System.IO.Path]::IsPathRooted($credPath)) {
         $credPath = [System.IO.Path]::GetFullPath(
-            (Join-Path $toolkitRoot ($credPath.TrimStart('.\').TrimStart('./')))
+            (Join-Path $toolkitRoot (($credPath -replace '^\.[\\/]', '')))
         )
     }
 
@@ -544,7 +544,7 @@ elseif ($Mode -eq 'ScheduledVault') {
         exit 1
     }
     if (-not [System.IO.Path]::IsPathRooted($VaultPath)) {
-        $VaultPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $VaultPath.TrimStart('.\').TrimStart('./')))
+        $VaultPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot ($VaultPath -replace '^\.[\\/]', '')))
     }
 
     if (-not (Test-Path -LiteralPath $VaultPath -PathType Leaf)) {
@@ -561,7 +561,7 @@ elseif ($Mode -eq 'ScheduledVault') {
     }
     if (-not [System.IO.Path]::IsPathRooted($keyPath)) {
         $keyPath = [System.IO.Path]::GetFullPath(
-            (Join-Path $toolkitRoot ($keyPath.TrimStart('.\').TrimStart('./')))
+            (Join-Path $toolkitRoot (($keyPath -replace '^\.[\\/]', '')))
         )
     }
 

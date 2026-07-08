@@ -124,8 +124,12 @@ function Get-PendingReviewers {
         # Only the Pending/Undecided reviewer tables; skip Completed/Reassigned/Approved/Revoked sections.
         if ($summaryText -notmatch '(?i)pending|undecided') { continue }
         if ($summaryText -match '(?i)\b(completed|reassigned|approved|revoked)\b') { continue }
-        $tbl = [regex]::Match($block, '<table\b[^>]*>(.*?)</table>', 'Singleline')
-        if (-not $tbl.Success) { continue }
+        # ALL tables in the collapsible, not just the first -- per-reviewer subhead+table
+        # layouts (V4d/V4e style) put each reviewer in a separate table, and Match (singular)
+        # silently dropped everyone after the first table.
+        $tbls = [regex]::Matches($block, '<table\b[^>]*>(.*?)</table>', 'Singleline')
+        if ($tbls.Count -eq 0) { continue }
+        foreach ($tbl in $tbls) {
         foreach ($row in [regex]::Matches($tbl.Groups[1].Value, '<tr\b[^>]*>(.*?)</tr>', 'Singleline')) {
             $cells = [regex]::Matches($row.Groups[1].Value, '<t[dh]\b[^>]*>(.*?)</t[dh]>', 'Singleline')
             if ($cells.Count -eq 0) { continue }
@@ -136,6 +140,7 @@ function Get-PendingReviewers {
             if ($name -match '(?i)no (undecided|decisions|items)') { continue }   # placeholder row
             if ($name.Length -gt 120) { continue }                                # not a name (a colspan note)
             [void]$names.Add($name)
+        }
         }
     }
     return @($names)

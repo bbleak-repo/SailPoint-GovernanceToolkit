@@ -3770,8 +3770,11 @@ function Export-SPCampaignComparisonHtml {
                 $delta = [Math]::Round(([double]$v2 - [double]$v1), 1)
                 $sign = if ($delta -gt 0) { '+' } else { '' }
                 $color = if ($delta -gt 0) { '#339933' } elseif ($delta -lt 0) { '#CC3333' } else { '#777777' }
-                # For revocation rate, invert colors (lower is better)
-                if ($mdef.Prop -eq 'RevocationRate') {
+                # Lower-is-better metrics invert the colors: revocation rate, and every
+                # hours-format metric (response times) -- a positive delta means SLOWER
+                # reviewers and used to render green (Export-SPCampaignCompletionReport
+                # already inverts these; this table now matches).
+                if ($mdef.Prop -eq 'RevocationRate' -or $mdef.Format -eq 'hours') {
                     $color = if ($delta -gt 0) { '#CC3333' } elseif ($delta -lt 0) { '#339933' } else { '#777777' }
                 }
                 $cells.Add("<span style=""color:${color}; font-weight:bold;"">${sign}${delta}</span>")

@@ -2769,7 +2769,7 @@ function Invoke-SPGuiReportDistribution {
         if (-not [System.IO.Path]::IsPathRooted($auditBase)) {
             # Resolve relative to toolkit root (PSScriptRoot of SP.GuiBridge = Modules\SP.Gui\)
             $tkRoot    = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-            $auditBase = [System.IO.Path]::GetFullPath((Join-Path $tkRoot $auditBase.TrimStart('.\').TrimStart('./')))
+            $auditBase = [System.IO.Path]::GetFullPath((Join-Path $tkRoot ($auditBase -replace '^\.[\\/]', '')))
         }
         $runStamp            = (Get-Date).ToString('yyyyMMdd-HHmmss')
         $leadershipOutputPath = Join-Path $auditBase "leadership\DistRun-$runStamp"

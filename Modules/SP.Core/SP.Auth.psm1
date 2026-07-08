@@ -222,7 +222,7 @@ function Get-SPCredentialsFromVault {
     $vaultPath = [string]$vaultSection.VaultPath
     if (-not [System.IO.Path]::IsPathRooted($vaultPath)) {
         $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-        $vaultPath   = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot ($vaultPath.TrimStart('.\').TrimStart('./'))))
+        $vaultPath   = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot (($vaultPath -replace '^\.[\\/]', ''))))
     }
 
     if (-not (Test-Path -LiteralPath $vaultPath -PathType Leaf)) {
@@ -303,7 +303,7 @@ function Get-SPCredentialsFromDpapi {
     if (-not [System.IO.Path]::IsPathRooted($credPath)) {
         $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
         $credPath = [System.IO.Path]::GetFullPath(
-            (Join-Path $toolkitRoot ($credPath.TrimStart('.\').TrimStart('./')))
+            (Join-Path $toolkitRoot (($credPath -replace '^\.[\\/]', '')))
         )
     }
 
@@ -410,7 +410,7 @@ function Get-SPCredentialsFromScheduledVault {
     }
     if (-not [System.IO.Path]::IsPathRooted($keyPath)) {
         $keyPath = [System.IO.Path]::GetFullPath(
-            (Join-Path $toolkitRoot ($keyPath.TrimStart('.\').TrimStart('./')))
+            (Join-Path $toolkitRoot (($keyPath -replace '^\.[\\/]', '')))
         )
     }
     if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
@@ -441,7 +441,7 @@ function Get-SPCredentialsFromScheduledVault {
     }
     if (-not [System.IO.Path]::IsPathRooted($vaultPath)) {
         $vaultPath = [System.IO.Path]::GetFullPath(
-            (Join-Path $toolkitRoot ($vaultPath.TrimStart('.\').TrimStart('./')))
+            (Join-Path $toolkitRoot (($vaultPath -replace '^\.[\\/]', '')))
         )
     }
     if (-not (Test-Path -LiteralPath $vaultPath -PathType Leaf)) {
