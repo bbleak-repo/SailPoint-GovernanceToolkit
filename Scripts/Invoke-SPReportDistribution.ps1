@@ -261,7 +261,7 @@ if (-not $OutputPath) {
 
 if (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = [System.IO.Path]::GetFullPath(
-        (Join-Path $toolkitRoot $OutputPath.TrimStart('.\').TrimStart('./'))
+        (Join-Path $toolkitRoot ($OutputPath -replace '^\.[\\/]', ''))
     )
 }
 
@@ -525,7 +525,7 @@ $supplement = $null
 if ($useSupplementForReports -and -not [string]::IsNullOrWhiteSpace($effectiveSupplementPath)) {
     if (-not [System.IO.Path]::IsPathRooted($effectiveSupplementPath)) {
         $effectiveSupplementPath = [System.IO.Path]::GetFullPath(
-            (Join-Path $toolkitRoot $effectiveSupplementPath.TrimStart('.\').TrimStart('./'))
+            (Join-Path $toolkitRoot ($effectiveSupplementPath -replace '^\.[\\/]', ''))
         )
     }
 

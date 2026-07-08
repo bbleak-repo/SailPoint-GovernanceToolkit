@@ -155,6 +155,60 @@ BeforeAll {
         })
     }
     New-DECampaignTrendFile -Dir $script:e2eTrendDir -CampaignId 'camp-beta' -Records @($campBeta)
+
+    # -----------------------------------------------------------
+    # RELATIVE-DATE fixtures ending TODAY, for every test that queries a
+    # NOW-relative window (Last30Days / -LookbackDays). The fixed-date set above
+    # (2026-05-14..06-12) is kept ONLY for the explicit month comparisons
+    # (DE-04 / DE-07's Compare call): window-based tests against it rotted as the
+    # wall clock advanced past the pinned dates -- DE-03 failed outright and
+    # DE-01/05/06/07 were days away from following it.
+    # -----------------------------------------------------------
+    $script:e2eRelMetricsDir = Join-Path $TestDrive 'de-e2e-rel-metrics'
+    $script:e2eRelTrendDir   = Join-Path $TestDrive 'de-e2e-rel-trend'
+
+    $relRecords = [System.Collections.Generic.List[hashtable]]::new()
+    for ($d = 0; $d -lt 30; $d++) {
+        $ts = (Get-Date).AddDays(-$d).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        # Same shapes as the fixed set: maturity 2.5 -> 3.5 (Up), stale 80 -> 160
+        # (alert), overdue = 2 in the most recent half (alert).
+        $maturity = [math]::Round(2.5 + ((29 - $d) / 29.0) * 1.0, 2)
+        $stale    = [int](80 + ((29 - $d) / 29.0) * 80)
+        $reviewer = [math]::Round(72 + ($d % 7), 1)
+        $overdue  = if ($d -lt 15) { 2 } else { 0 }
+        $relRecords.Add([ordered]@{
+            timestamp = $ts
+            label     = $null
+            metrics   = [ordered]@{
+                'maturity.overallScore'       = $maturity
+                'campaigns.activeCount'       = 4
+                'reviewers.avgCompletionPct'  = $reviewer
+                'staleAccess.totalItems'      = $stale
+                'campaigns.overdueCount'      = $overdue
+                'campaigns.completedCount'    = 1
+                'campaigns.avgDaysToComplete' = 14.0
+            }
+        })
+    }
+    New-DEGovernanceMetricsFile -Dir $script:e2eRelMetricsDir -Records @($relRecords)
+
+    $relAlpha = [System.Collections.Generic.List[hashtable]]::new()
+    for ($d = 0; $d -lt 30; $d += 5) {
+        $ts = (Get-Date).AddDays(-(29 - $d)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $relAlpha.Add([ordered]@{
+            timestamp    = $ts
+            campaignId   = 'camp-alpha-rel'
+            campaignName = 'Alpha Campaign (relative)'
+            status       = 'ACTIVE'
+            environment  = 'TEST'
+            dueDate      = ''
+            metrics      = [ordered]@{
+                'rates.privApprovalRate' = [math]::Round(0.10 + ($d / 290.0), 4)
+                'counts.total'           = 200
+            }
+        })
+    }
+    New-DECampaignTrendFile -Dir $script:e2eRelTrendDir -CampaignId 'camp-alpha-rel' -Records @($relAlpha)
 }
 
 # ===================================================================
@@ -162,7 +216,7 @@ BeforeAll {
 # ===================================================================
 Describe "DE-01: Dashboard data has KPI values" {
     It "KPIs.MaturityScore.Value is not null when 30 days of data exist" {
-        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
+        Set-DEConfigMock -MetricsDir $script:e2eRelMetricsDir -TrendDir $script:e2eRelTrendDir
 
         $dashboard = Get-SPGovernanceDashboardData -Period Last30Days
 
@@ -180,39 +234,9 @@ Describe "DE-01: Dashboard data has KPI values" {
 # DE-02: Sparkline arrays have weekly buckets
 # ===================================================================
 Describe "DE-02: Sparkline arrays have weekly buckets" {
-    BeforeAll {
-        # Date-anchored fixture: the file-level $script:e2eMetricsDir is pinned to
-        # fixed dates (2026-05-14..06-12). The Last30Days window is relative to NOW,
-        # so as wall-clock advances those records drift out of the window and the
-        # weekly-bucket count shrinks. Build a fresh 30-day dataset ending TODAY so
-        # all 30 days land inside Last30Days -> 5 ISO weeks -> 4-5 buckets, honestly.
-        $script:de02MetricsDir = Join-Path $TestDrive 'de02-metrics'
-        $de02Records = [System.Collections.Generic.List[hashtable]]::new()
-        for ($d = 0; $d -lt 30; $d++) {
-            $ts = (Get-Date).AddDays(-$d).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-            $maturity = [math]::Round(2.5 + ((29 - $d) / 29.0) * 1.0, 2)
-            $stale    = [int](80 + ((29 - $d) / 29.0) * 80)
-            $reviewer = [math]::Round(72 + ($d % 7), 1)
-            $overdue  = if ($d -lt 15) { 2 } else { 0 }
-            $de02Records.Add([ordered]@{
-                timestamp = $ts
-                label     = $null
-                metrics   = [ordered]@{
-                    'maturity.overallScore'       = $maturity
-                    'campaigns.activeCount'       = 4
-                    'reviewers.avgCompletionPct'  = $reviewer
-                    'staleAccess.totalItems'      = $stale
-                    'campaigns.overdueCount'      = $overdue
-                    'campaigns.completedCount'    = 1
-                    'campaigns.avgDaysToComplete' = 14.0
-                }
-            })
-        }
-        New-DEGovernanceMetricsFile -Dir $script:de02MetricsDir -Records @($de02Records)
-    }
 
     It "Sparklines.MaturityScore has 4-5 entries for 30 days of daily data" {
-        Set-DEConfigMock -MetricsDir $script:de02MetricsDir -TrendDir $script:e2eTrendDir
+        Set-DEConfigMock -MetricsDir $script:e2eRelMetricsDir -TrendDir $script:e2eRelTrendDir
 
         $dashboard = Get-SPGovernanceDashboardData -Period Last30Days
 
@@ -229,7 +253,7 @@ Describe "DE-02: Sparkline arrays have weekly buckets" {
 # ===================================================================
 Describe "DE-03: Direction computed correctly" {
     It "Direction is Up when maturity is trending upward in the data" {
-        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
+        Set-DEConfigMock -MetricsDir $script:e2eRelMetricsDir -TrendDir $script:e2eRelTrendDir
 
         $dashboard = Get-SPGovernanceDashboardData -Period Last30Days
 
@@ -272,7 +296,7 @@ Describe "DE-04: Compare-SPGovernancePeriods returns deltas" {
 # ===================================================================
 Describe "DE-05: Get-SPGovernanceAlerts detects issues" {
     It "Produces alerts for declining/growing metrics planted in the data" {
-        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
+        Set-DEConfigMock -MetricsDir $script:e2eRelMetricsDir -TrendDir $script:e2eRelTrendDir
 
         $alerts = @(Get-SPGovernanceAlerts -LookbackDays 30)
 
@@ -295,7 +319,7 @@ Describe "DE-05: Get-SPGovernanceAlerts detects issues" {
 # ===================================================================
 Describe "DE-06: Dashboard HTML has KPI cards" {
     It "Exported HTML contains DOCTYPE and KPI metric labels" {
-        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
+        Set-DEConfigMock -MetricsDir $script:e2eRelMetricsDir -TrendDir $script:e2eRelTrendDir
 
         $dashboard = Get-SPGovernanceDashboardData -Period Last30Days
         $outDir    = Join-Path $TestDrive 'de06-html'
@@ -318,10 +342,13 @@ Describe "DE-06: Dashboard HTML has KPI cards" {
 # ===================================================================
 Describe "DE-07: Full round-trip produces valid file" {
     It "HTML file exists, is >1KB, and contains closing html tag" {
-        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
+        # Window-relative dashboard from the relative fixture; explicit-month
+        # comparison from the fixed-date fixture (re-mocked between the calls).
+        Set-DEConfigMock -MetricsDir $script:e2eRelMetricsDir -TrendDir $script:e2eRelTrendDir
 
         # Full pipeline: data -> compare -> alerts -> HTML
         $dashboard  = Get-SPGovernanceDashboardData -Period Last30Days
+        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
         $comparison = Compare-SPGovernancePeriods -Period1 '2026-05' -Period2 '2026-06' -Granularity Month
         # Alerts are already embedded in dashboard, but we can also pass PeriodComparison
         $outDir     = Join-Path $TestDrive 'de07-html'

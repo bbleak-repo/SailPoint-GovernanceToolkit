@@ -288,7 +288,7 @@ if (-not $OutputPath) {
 
 if (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = [System.IO.Path]::GetFullPath(
-        (Join-Path $toolkitRoot $OutputPath.TrimStart('.\').TrimStart('./'))
+        (Join-Path $toolkitRoot ($OutputPath -replace '^\.[\\/]', ''))
     )
 }
 

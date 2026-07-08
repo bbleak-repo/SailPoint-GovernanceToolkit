@@ -2,8 +2,8 @@
 
 Full-codebase review focused on logic, reporting accuracy, and cache correctness.
 Every finding was verified against source; several were verified empirically under
-Windows PowerShell 5.1. Findings marked **[FIXED]** were remediated on branch
-`fix/review-findings` — see `REVIEW-CHANGES.html` for before/after details.
+Windows PowerShell 5.1. Findings marked **[FIXED]** were remediated on branches
+`fix/review-findings` and `fix/remaining-findings` (all 49 findings resolved) — see `REVIEW-CHANGES.html` for before/after details.
 
 Severity: **C** = critical (feature broken), **H** = high (wrong data / cache
 integrity), **M** = medium, **L** = low.
@@ -31,13 +31,13 @@ integrity), **M** = medium, **L** = low.
 | B5 | M | **Interrupted TTL-refresh permanently seals partial data.** Old items file deleted at fetch start, old meta replaced only at finalize; crash mid-fetch + campaign completes → partial set sealed permanent, no self-heal. **[FIXED — Stale meta removed (provenance captured first) at refetch start; partials can no longer be sealed.]** | `SP.AuditQueries.psm1:7320, 7461` |
 | B6 | M | **Identity disk-cache compaction silently no-ops when all entries are expired** — `Write-SPHtmlFile` has `[Parameter(Mandatory)][string]$Content`, which rejects empty strings; swallowed by `catch { }`. **[FIXED — AllowEmptyString]** | `SP.IdentityService.psm1:258`; `SP.HtmlHelpers.psm1:253` |
 | B7 | L | **JWT payload decoded as standard Base64, not base64url** — tenant URL extraction fails for most real JWTs (silently). **[FIXED]** | `SP.Auth.psm1:784` |
-| B8 | L | `Get-SPConfig` returns a shared mutable object reference; caller mutation poisons all later reads. | `SP.Config.psm1:1463` |
+| B8 | L | `Get-SPConfig` returns a shared mutable object reference; caller mutation poisons all later reads. **[FIXED (follow-up branch) — -AsCopy private deep clone added; read-only contract documented on the shared default return (per-call clone too slow for identity hot loops).]** | `SP.Config.psm1:1463` |
 | B9 | L | Item memory cache keyed by campaign id only — ignores `-CachePath`; second path gets the other directory's items. **[FIXED — Memory cache keyed by campaignId|cachePath.]** | `SP.AuditQueries.psm1:7155` |
 | B10 | L | Partial-fetch resume path ignores `-NoCache` — "fresh" fetch silently includes leftover partial disk data. **[FIXED — resume now applies only to default fetches (fixed with B1/B2).]** | `SP.AuditQueries.psm1:7290` |
 | B11 | L | PII ACL warning misses `FullControl` (`FileSystemRights -match 'Read'` doesn't match "FullControl"). **[FIXED — ACL match extended to FullControl/Modify.]** | `SP.IdentityService.psm1:175` |
-| B12 | L | Concurrent processes can lose identity-cache appends during another session's compaction rewrite (read → rewrite → move window). | `SP.IdentityService.psm1:220-261` |
-| B13 | L | `Test-SPCacheValid` doesn't lazy-load from disk the way `Get-SPCachedItem` does (latent — only tests use it today). | `SP.CacheService.psm1:297` |
-| B14 | L | `TrimStart('.\')` treats the argument as a character set — corrupts `..\`-style and `.hidden\` relative vault/credential paths. | `SP.Auth.psm1:225, 306, 413, 443` |
+| B12 | L | Concurrent processes can lose identity-cache appends during another session's compaction rewrite (read → rewrite → move window). **[FIXED (follow-up branch) — Cross-process mutex (G10 pattern) guards per-entry appends AND the compaction read->rewrite->replace.]** | `SP.IdentityService.psm1:220-261` |
+| B13 | L | `Test-SPCacheValid` doesn't lazy-load from disk the way `Get-SPCachedItem` does (latent — only tests use it today). **[FIXED (follow-up branch) — Shared _EnsureDiskLoaded helper; Test-SPCacheValid now lazy-loads like Get-SPCachedItem.]** | `SP.CacheService.psm1:297` |
+| B14 | L | `TrimStart('.\')` treats the argument as a character set — corrupts `..\`-style and `.hidden\` relative vault/credential paths. **[FIXED (follow-up branch) — Single-prefix regex strip in all 16 sites across 8 files; '..' parent paths now resolve via GetFullPath.]** | `SP.Auth.psm1:225, 306, 413, 443` |
 
 ## C. Reporting — rendering corruption
 
@@ -60,12 +60,12 @@ integrity), **M** = medium, **L** = low.
 | D7 | M | Reviewer-delegation metric uses loop-leaked `$campaignCreated` (last campaign only) for all reviewers' `AvgHoursBeforeDelegation`. **[FIXED — Lead-times computed at collection against each delegation’s own campaign.]** | `SP.AuditQueries.psm1:6466` |
 | D8 | M | `Get-SPSourceAggregationHealth` mixes `[datetime]::UtcNow` with local-Kind parse — freshness off by the UTC offset (false/missed staleness). **[FIXED — RoundtripKind parse + ToUniversalTime.]** | `SP.AuditQueries.psm1:5471, 5563` |
 | D9 | M | Empty (0-item) signed certs classified NotStarted and escalated on the leadership "stalled reviewers" list. **[FIXED — NotStarted requires items present and cert not completed.]** | `SP.CampaignDiff.psm1:207, 219, 379` |
-| D10 | L | `Get-SPOrphanAccounts` include-switches only apply to Uncorrelated orphans; Terminated/Dangling categories always include disabled/service accounts. | `SP.AuditQueries.psm1:5148, 5241-5269` |
+| D10 | L | `Get-SPOrphanAccounts` include-switches only apply to Uncorrelated orphans; Terminated/Dangling categories always include disabled/service accounts. **[FIXED (follow-up branch) — Both switches now gate every orphan category (Uncorrelated, TerminatedOwner, DanglingReference).]** | `SP.AuditQueries.psm1:5148, 5241-5269` |
 | D11 | L | `Measure-SPCampaignMetrics` doesn't unwrap nested decision objects → 0% completion on nested-shape tenants while audit shows approvals. **[FIXED — Nested decision unwrap added to Measure-SPCampaignMetrics.]** | `SP.AuditReportCore.psm1:3021` |
-| D12 | L | `ReviewerCount` metric is a certification count — double-counts multi-cert/reassigned reviewers. | `SP.AuditReportCore.psm1:3084` |
-| D13 | L | Campaign comparison colors slower response times green (delta sign not inverted for time metrics). | `SP.AuditReportHtml.psm1:3724` |
-| D14 | L | BI export leadership columns read keys that never exist (`ExecutiveName`, `Identities`) → always blank. | `SP.AuditReportHtml.psm1:6716` |
-| D15 | L | RC03 expanded tree labels unknown-Enabled members as "enabled", contradicting the collapsed 3-state counts. | `RC03-Tree.ps1:64` |
+| D12 | L | `ReviewerCount` metric is a certification count — double-counts multi-cert/reassigned reviewers. **[FIXED (follow-up branch) — Distinct reviewers by id (name fallback); unknown-reviewer certs still count once each.]** | `SP.AuditReportCore.psm1:3084` |
+| D13 | L | Campaign comparison colors slower response times green (delta sign not inverted for time metrics). **[FIXED (follow-up branch) — All hours-format metrics (response times) invert delta colors like RevocationRate.]** | `SP.AuditReportHtml.psm1:3724` |
+| D14 | L | BI export leadership columns read keys that never exist (`ExecutiveName`, `Identities`) → always blank. **[FIXED (follow-up branch) — Group-SPAuditByLeadership now emits per-manager Identities + per-director ExecutiveName; BI columns populate.]** | `SP.AuditReportHtml.psm1:6716` |
+| D15 | L | RC03 expanded tree labels unknown-Enabled members as "enabled", contradicting the collapsed 3-state counts. **[FIXED (follow-up branch) — 3-state badge; unknown Enabled renders 'unknown' (neutral).]** | `RC03-Tree.ps1:64` |
 
 ## E. Evidence scripts & orchestrator
 
@@ -81,7 +81,7 @@ integrity), **M** = medium, **L** = low.
 | E8 | M | V6 Chart 10 / V7 Chart 7 "CUMULATIVE/TOTALS" rows sum daily *snapshots*, not deltas — multiply-count when one campaign spans days. **[FIXED — Window aggregates use latest snapshot per distinct campaign.]** | `V6.ps1:1292`; `V7.ps1:1362` |
 | E9 | M | Scraper `-Until` excludes reports from the Until day when filenames carry timestamps (time-of-day vs midnight comparison). **[FIXED — Dates day-normalized at parse; -Until inclusive again.]** | `Invoke-SPPendingReviewerScrape.ps1:255` |
 | E10 | L | Scraper `-MinMisses` / chronic-pending denominator count per report file, not per calendar day — regenerated reports skew both. **[FIXED — Per-calendar-day counting for -MinMisses/Pct/heatmap.]** | `Invoke-SPPendingReviewerScrape.ps1:282` |
-| E11 | L | Scraper takes only the first `<table>` per Pending/Undecided collapsible (latent multi-table format hazard). | `Invoke-SPPendingReviewerScrape.ps1:124` |
+| E11 | L | Scraper takes only the first `<table>` per Pending/Undecided collapsible (latent multi-table format hazard). **[FIXED (follow-up branch) — All tables per Pending/Undecided collapsible are scraped (Matches, not Match).]** | `Invoke-SPPendingReviewerScrape.ps1:124` |
 
 ## F. Scope-key stability (user-reported, 2026-07-07 second session)
 

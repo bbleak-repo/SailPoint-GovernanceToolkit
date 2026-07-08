@@ -227,10 +227,10 @@ $identitiesCsvPath = $config.Testing.IdentitiesCsvPath
 $campaignsCsvPath  = $config.Testing.CampaignsCsvPath
 
 if (-not [System.IO.Path]::IsPathRooted($identitiesCsvPath)) {
-    $identitiesCsvPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $identitiesCsvPath.TrimStart('.\').TrimStart('./')))
+    $identitiesCsvPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot ($identitiesCsvPath -replace '^\.[\\/]', '')))
 }
 if (-not [System.IO.Path]::IsPathRooted($campaignsCsvPath)) {
-    $campaignsCsvPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $campaignsCsvPath.TrimStart('.\').TrimStart('./')))
+    $campaignsCsvPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot ($campaignsCsvPath -replace '^\.[\\/]', '')))
 }
 
 # Load identities

@@ -80,6 +80,28 @@ function _IsExpired {
     return ($elapsed -ge $ttl)
 }
 
+function _EnsureDiskLoaded {
+    <#
+    .SYNOPSIS
+        Performs the one-time lazy disk import for a disk-backed store.
+    .DESCRIPTION
+        Shared by Get-SPCachedItem AND Test-SPCacheValid so both entry points see
+        disk-persisted entries. Previously only Get did the lazy import, so the
+        Test-then-Get pattern reported $false on a fresh session even when the
+        disk file held valid data.
+    #>
+    param([hashtable]$Store, [string]$StoreName)
+
+    if ($Store.ContainsKey('DiskPath') -and -not [string]::IsNullOrWhiteSpace($Store.DiskPath) -and
+        $Store.ContainsKey('DiskLoaded') -and -not $Store.DiskLoaded) {
+        if (Test-Path $Store.DiskPath) {
+            $ttl = if ($Store.TtlMinutes -gt 0) { $Store.TtlMinutes } else { 0 }
+            Import-SPCacheStore -Store $StoreName -Path $Store.DiskPath -TtlMinutes $ttl | Out-Null
+        }
+        $Store.DiskLoaded = $true
+    }
+}
+
 #endregion Internal Helpers
 
 #region Public Functions
@@ -167,14 +189,7 @@ function Get-SPCachedItem {
 
     # Lazy disk load: if the store has a DiskPath and has not been loaded yet,
     # import from disk before checking the key.
-    if ($s.ContainsKey('DiskPath') -and -not [string]::IsNullOrWhiteSpace($s.DiskPath) -and
-        $s.ContainsKey('DiskLoaded') -and -not $s.DiskLoaded) {
-        if (Test-Path $s.DiskPath) {
-            $ttl = if ($s.TtlMinutes -gt 0) { $s.TtlMinutes } else { 0 }
-            Import-SPCacheStore -Store $Store -Path $s.DiskPath -TtlMinutes $ttl | Out-Null
-        }
-        $s.DiskLoaded = $true
-    }
+    _EnsureDiskLoaded -Store $s -StoreName $Store
 
     if (-not $s.Items.ContainsKey($Key)) {
         if ($s.ContainsKey('TrackStats') -and $s.TrackStats) { $s.MissCount++ }
@@ -300,6 +315,9 @@ function Test-SPCacheValid {
     )
 
     $s = _EnsureStore -Name $Store
+
+    # Same lazy disk load as Get-SPCachedItem so Test/Get agree on fresh sessions.
+    _EnsureDiskLoaded -Store $s -StoreName $Store
 
     if (-not $s.Items.ContainsKey($Key)) { return $false }
 

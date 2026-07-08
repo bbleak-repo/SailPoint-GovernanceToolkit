@@ -61,8 +61,14 @@ function New-RCTreeComponent {
             foreach ($m in ($members | Sort-Object @{ Expression = { [string](Get-RCProp $_ 'DisplayName') } })) {
                 $dn  = [string](Get-RCProp $m 'DisplayName'); if (-not $dn) { $dn = [string](Get-RCProp $m 'SamAccountName') }
                 $sam = [string](Get-RCProp $m 'SamAccountName')
-                $en  = (Get-RCProp $m 'Enabled') -ne $false
-                $eb  = if ($en) { '<span class="rc-badge ok">enabled</span>' } else { '<span class="rc-badge danger">disabled</span>' }
+                # 3-state badge matching the collapsed view's counts: a member with NO
+                # Enabled attribute is 'unknown', not 'enabled' -- the old 2-state test
+                # ((Enabled) -ne $false) badged unknowns green while the collapsed view
+                # counted them separately.
+                $enVal = Get-RCProp $m 'Enabled'
+                $eb  = if ($null -eq $enVal) { '<span class="rc-badge neutral">unknown</span>' }
+                       elseif ($enVal -eq $false) { '<span class="rc-badge danger">disabled</span>' }
+                       else { '<span class="rc-badge ok">enabled</span>' }
                 [void]$body.AppendLine(('<div class="rc-leaf">{0} <span class="c">{1}</span> {2}</div>' -f (ConvertTo-RCHtmlText $dn), (ConvertTo-RCHtmlText $sam), $eb))
             }
         } else {

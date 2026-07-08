@@ -222,7 +222,7 @@ else {
         }
         if (-not [System.IO.Path]::IsPathRooted($deltaCertOutputPath)) {
             $deltaCertOutputPath = [System.IO.Path]::GetFullPath(
-                (Join-Path $toolkitRoot $deltaCertOutputPath.TrimStart('.\').TrimStart('./'))
+                (Join-Path $toolkitRoot ($deltaCertOutputPath -replace '^\.[\\/]', ''))
             )
         }
         $searchBase = Join-Path $deltaCertOutputPath 'escalation-managers'

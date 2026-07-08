@@ -49,14 +49,15 @@ Companion document: <code>REVIEW-FINDINGS.md</code> (full 35-finding review); th
 
 <div>
 <span class="kpi"><span class="n">49</span><span class="l">Findings catalogued</span></span>
-<span class="kpi"><span class="n">40</span><span class="l">Findings fixed</span></span>
-<span class="kpi"><span class="n">19</span><span class="l">Fix commits</span></span>
-<span class="kpi"><span class="n">20</span><span class="l">Files changed</span></span>
+<span class="kpi"><span class="n">49</span><span class="l">Findings fixed</span></span>
+<span class="kpi"><span class="n">22</span><span class="l">Fix commits</span></span>
+<span class="kpi"><span class="n">32</span><span class="l">Files changed</span></span>
 </div>
-<p class="note">Three remediation rounds on 2026-07-07: Round 1 (sections 1&ndash;7) fixed all critical/high items;
-Round 2 (section 8) fixed the remaining confirmed-defect mediums plus most lows; Round 3 (section 9) delivered the
-reassignment-stable scope key and the four user-decided semantics changes. Nine lower-risk findings remain open
-with reasons (<a href="#remaining">Remaining</a>).</p>
+<p class="note">Four remediation rounds on 2026-07-07: Round 1 (sections 1&ndash;7) fixed all critical/high items;
+Round 2 (section 8) the remaining confirmed-defect mediums plus most lows; Round 3 (section 9) the
+reassignment-stable scope key and four user-decided semantics changes; Round 4 (section 10, branch
+<code>fix/remaining-findings</code>) closed out the final ten deferred findings. <strong>Every catalogued finding is
+now resolved.</strong></p>
 
 <h2>How the review was performed</h2>
 <p>
@@ -79,7 +80,7 @@ Each fix below states how it was verified.
 <li><a href="#c7">Quick wins: rubber-stamp CSV columns, JSON Patch, identity failure TTL, empty-file writes</a></li>
 <li><a href="#c8">Round 2: twenty further fixes (evidence scripts, remediation counting, orchestrator, cache, API, scraper)</a></li>
 <li><a href="#c9">Round 3: reassignment-stable scope key + four user-decided semantics changes</a></li>
-<li><a href="#remaining">Remaining findings (not yet fixed)</a></li>
+<li><a href="#c10">Round 4: the final ten (cache mutex, path handling, orphan scoping, BI enrichment, config contract)</a></li>
 </ol>
 </div>
 
@@ -399,8 +400,25 @@ level of a report set (threaded by the band-filtered wrapper), links embed the t
 <span class="verified">VERIFIED: 252/252 report/leadership/reviewer/V4e tests pass</span></p>
 
 <!-- ================================================================ -->
-<h2 id="remaining">Remaining findings (documented, not yet fixed)</h2>
-<p>After Round 3, the following remain open &mdash; all are lower-risk or judgment-call items, catalogued with locations and failure scenarios in <code>REVIEW-FINDINGS.md</code>:</p>
+<h2 id="c10">10. Round 4 &mdash; the final ten (branch <code>fix/remaining-findings</code>)</h2>
+<p>Commits <span class="commit">24a8f22</span> (six low-severity fixes), <span class="commit">9c9ad1b</span> (behavior fixes), <span class="commit">191f67e</span> (config contract).</p>
+<table>
+<tr><th>Ref</th><th>What changed</th></tr>
+<tr><td>B13</td><td><code>Test-SPCacheValid</code> performs the same lazy disk import as <code>Get-SPCachedItem</code> (shared <code>_EnsureDiskLoaded</code>) &mdash; Test-then-Get no longer reports <code>$false</code> on fresh sessions with valid disk data.</td></tr>
+<tr><td>B14</td><td><code>TrimStart('.\')</code> treated its argument as a character set, so <code>..\shared\vault.enc</code> lost its parent reference and <code>.hidden\x</code> its dot &mdash; replaced with a single-prefix regex strip at all 16 sites across 8 files. <span class="verified">VERIFIED: .\ and ./ stripped; ..\ and .hidden preserved</span></td></tr>
+<tr><td>D13</td><td>Campaign-comparison delta colors invert for every hours-format metric (response times) &mdash; slower no longer renders green.</td></tr>
+<tr><td>D15</td><td>RC03 expanded tree renders a 3-state badge; unknown-Enabled members show "unknown" instead of a green "enabled", matching the collapsed counts.</td></tr>
+<tr><td>E11</td><td>The pending-reviewer scraper reads ALL tables per Pending/Undecided collapsible &mdash; per-reviewer subhead+table layouts no longer drop reviewers after the first table.</td></tr>
+<tr><td>D12</td><td><code>Measure-SPCampaignMetrics</code> ReviewerCount counts DISTINCT reviewers (by id, name fallback) instead of certifications.</td></tr>
+<tr><td>D10</td><td><code>-IncludeDisabledAccounts</code>/<code>-IncludeServiceAccounts</code> gate every orphan category (previously Uncorrelated only), matching the docstring; TerminatedOwner/DanglingReference summary counts no longer inflate on default invocations.</td></tr>
+<tr><td>B12</td><td>Identity disk-cache writes serialized by a cross-process named mutex (the proven G10 pattern): per-entry appends and the compaction read&rarr;rewrite&rarr;replace both hold it, closing the concurrent-process append-loss window. On acquisition timeout the write proceeds unguarded (the cache is advisory).</td></tr>
+<tr><td>D14</td><td><code>Group-SPAuditByLeadership</code> now emits per-manager <code>Identities</code> records and per-director <code>ExecutiveName</code> &mdash; the shape the BI export's leadership enrichment was written against but which never existed. The bi-governance CSV's OrgDirector/OrgExecutive/OrgLevel columns populate for the first time.</td></tr>
+<tr><td>B8</td><td><code>Get-SPConfig</code> gains <code>-AsCopy</code> (private PSSerializer deep clone, verified isolated) and an explicit read-only contract on the shared default return &mdash; a per-call clone was rejected because identity-resolution hot loops call it per item.</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="remaining">Remaining findings</h2>
+<p><strong>None.</strong> All 49 catalogued findings are resolved as of Round 4. The table below preserves the Round-3-era deferral rationale for the record:</p>
 <table>
 <tr><th>Sev</th><th>Finding</th><th>Ref</th><th>Why deferred</th></tr>
 <tr><td class="sev-low">LOW</td><td><code>Get-SPConfig</code> returns a shared mutable reference</td><td>B8</td><td>A deep-clone changes object identity for every caller; no in-repo caller mutates the config today. Revisit if a mutation appears.</td></tr>
@@ -441,9 +459,11 @@ level of a report set (threaded by the band-filtered wrapper), links embed the t
 
 <h2>Verification summary</h2>
 <ul>
-<li><strong>Final full battery after Round 3 (all 49 non-GUI suites, Pester 5.7.1 on Windows PowerShell 5.1): 2192 passed / 3 failed / 13 skipped.</strong>
-The 3 failures (DE-03, TQ-01, TQ-04 &mdash; governance dashboard trend direction) fail <em>identically on master</em> (verified via a clean
-baseline worktree) &mdash; pre-existing, unrelated to this branch. Round 3 verification also includes: the reassignment diff simulation
+<li><strong>Final full battery after Round 4 (all 49 non-GUI suites, Pester 5.7.1 on Windows PowerShell 5.1): 2195 passed / 0 failed / 13 skipped &mdash; the first fully green run.</strong>
+The 3 failures present since before this work (DE-03, TQ-01, TQ-04 &mdash; governance dashboard trend direction) were shown NOT to be product
+defects: their fixtures pinned June-2026 timestamps that rotted out of the now-relative Last30Days window. All window-based dashboard-trend
+tests now use relative fixtures (and DE-01/05/06/07 + the vacuously-passing TQ-05 were rot-proofed with them); explicit month-comparison
+tests keep deliberately fixed dates. Round 3 verification also includes: the reassignment diff simulation
 (0 added / 0 removed, was 1/1), 121/121 key-suite tests, 252/252 report/leadership/reviewer/V4e tests, and the series suites re-run
 green (47/47) after their fixtures were updated to the new key semantics.</li>
 <li><strong>Round 2 full battery (Pester 5.7.1, Windows PowerShell 5.1): 553 passed / 0 failed / 0 skipped</strong> across 22 test files covering every touched module,

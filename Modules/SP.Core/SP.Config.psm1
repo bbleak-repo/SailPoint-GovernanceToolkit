@@ -47,7 +47,7 @@ function Get-SPConfigDefaults {
                 CredentialKey    = 'sailpoint-isc'
             }
             DpapiCredential = @{ Path = '.\Data\sp-dpapi-credential.xml' }
-            ScheduledVault  = @{ KeyPath = '.\Data\sp-scheduled-key.enc' }
+            ScheduledVault  = @{ KeyPath = '.\Data\sp-scheduled-key.enc'; KeyProtection = 'Dpapi' }   # KeyProtection shipped in the template (mac-validation) but was missing here, tripping the unknown-key warning (DIST-06)
         }
         Logging = @{
             Path             = '.\Logs'
@@ -1398,6 +1398,14 @@ function Get-SPConfig {
         Reads the configuration file, merges with defaults, and returns a PSCustomObject.
         Caches the result by path. Use -Force to bypass cache.
 
+        CONTRACT: the default return is the SHARED CACHED INSTANCE, returned by
+        reference for performance (identity-resolution hot loops call this per item;
+        a deep clone per call would add minutes to large campaigns). Treat it as
+        READ-ONLY -- mutating it silently changes retry/rate-limit/path behavior for
+        every later caller in the session, including background runspaces. A caller
+        that needs to tweak values for a one-off must request its own copy with
+        -AsCopy.
+
         Local override convention: when -ConfigPath is omitted, settings.local.json
         next to settings.json wins if present. This lets the tracked settings.json
         stay as the CHANGE_ME template while developers run against a gitignored
@@ -1408,6 +1416,10 @@ function Get-SPConfig {
         location).
     .PARAMETER Force
         Force reload even if cached.
+    .PARAMETER AsCopy
+        Return a private deep clone instead of the shared cached instance. Safe to
+        mutate; changes never leak to other callers. Costs a serialization
+        round-trip -- do not use inside per-item loops.
     .OUTPUTS
         [PSCustomObject] Full configuration object
     .EXAMPLE
@@ -1424,7 +1436,10 @@ function Get-SPConfig {
         [string]$ConfigPath,
 
         [Parameter()]
-        [switch]$Force
+        [switch]$Force,
+
+        [Parameter()]
+        [switch]$AsCopy
     )
 
     # Determine config path. When -ConfigPath is not supplied, defer to
@@ -1436,6 +1451,12 @@ function Get-SPConfig {
 
     # Return cached config if available and not forced
     if (-not $Force -and $null -ne $script:ConfigCache -and $script:ConfigPath -eq $ConfigPath) {
+        if ($AsCopy) {
+            # Private deep clone via PSSerializer round-trip: safe to mutate,
+            # never leaks back into the shared cached instance.
+            return [System.Management.Automation.PSSerializer]::Deserialize(
+                [System.Management.Automation.PSSerializer]::Serialize($script:ConfigCache, 10))
+        }
         return $script:ConfigCache
     }
 
@@ -1485,6 +1506,11 @@ function Get-SPConfig {
     $script:ConfigCache = $configObject
     $script:ConfigPath  = $ConfigPath
 
+    if ($AsCopy) {
+        # Same private-clone semantics as the cache-hit path above.
+        return [System.Management.Automation.PSSerializer]::Deserialize(
+            [System.Management.Automation.PSSerializer]::Serialize($configObject, 10))
+    }
     return $configObject
 }
 

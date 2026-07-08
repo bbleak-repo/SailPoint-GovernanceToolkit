@@ -5268,6 +5268,14 @@ function Get-SPOrphanAccounts {
             continue
         }
 
+        # The -IncludeDisabledAccounts / -IncludeServiceAccounts switches gate EVERY
+        # orphan category, matching the docstring ("disabled accounts can optionally
+        # be included"). They previously only filtered the Uncorrelated branch, so
+        # default invocations still listed disabled/service accounts under
+        # TerminatedOwner / DanglingReference and inflated the summary counts.
+        if ($pendingAcct['Disabled'] -and -not $IncludeDisabledAccounts) { continue }
+        if ($pendingAcct['IsServiceAccount'] -and -not $IncludeServiceAccounts) { continue }
+
         $orphanAccounts.Add(@{
             AccountId        = $pendingAcct['AccountId']
             AccountName      = $pendingAcct['AccountName']
