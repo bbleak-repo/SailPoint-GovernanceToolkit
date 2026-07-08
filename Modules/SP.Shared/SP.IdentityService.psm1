@@ -172,7 +172,10 @@ function _WarnIfCacheDirectoryInsecure {
             $acl = Get-Acl $DirPath
             foreach ($rule in $acl.Access) {
                 $id = $rule.IdentityReference.Value
-                if ($id -match 'Everyone|BUILTIN\\Users|Authenticated Users' -and $rule.FileSystemRights -match 'Read') {
+                # FullControl/Modify imply read access but do not contain the string
+                # 'Read' -- Everyone:FullControl (the worst case) never warned before.
+                if ($id -match 'Everyone|BUILTIN\\Users|Authenticated Users' -and
+                    $rule.FileSystemRights -match 'Read|FullControl|Modify') {
                     Write-SPLog -Message "Cache directory '$DirPath' is readable by '$id' -- consider restricting access for PII protection" `
                         -Severity WARN -Component 'SP.IdentityService' -Action '_WarnIfCacheDirectoryInsecure'
                     return

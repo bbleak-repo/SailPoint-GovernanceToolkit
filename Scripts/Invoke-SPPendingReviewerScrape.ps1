@@ -95,7 +95,10 @@ function Resolve-ReportDate {
     foreach ($f in $fmts) {
         $dt = [datetime]::MinValue
         if ([datetime]::TryParseExact($token, $f, $inv, [System.Globalization.DateTimeStyles]::None, [ref]$dt)) {
-            return @{ Date = $dt; Label = $dt.ToString('yyyy-MM-dd') }
+            # .Date: the HHmmss formats carry a time-of-day, and the -Since/-Until
+            # window compares against midnight-normalized bounds -- an un-normalized
+            # 15:30 report silently fell OUTSIDE an inclusive -Until on its own day.
+            return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd') }
         }
     }
     # Loose parse of the first date-looking chunk
@@ -260,19 +263,22 @@ foreach ($f in $files) {
 $reports = @($reports | Sort-Object Date, Label)
 if ($reports.Count -eq 0) { Write-Host "No reports in the requested date window." -ForegroundColor Yellow; exit 0 }
 
-$total = $reports.Count
-$dateLabels = @($reports | ForEach-Object { $_.Label })
+# Count DAYS, not report files: a report regenerated twice on one day (both files
+# kept) used to give a one-day miss Count=2 (surviving -MinMisses 2), deflate every
+# reviewer's Pct via a doubled denominator, and emit duplicate heatmap columns.
+$dateLabels = @($reports | ForEach-Object { $_.Label } | Sort-Object -Unique)
+$total = $dateLabels.Count
 
-# Aggregate per reviewer.
-$counts = @{}            # name -> int
+# Aggregate per reviewer (grid = distinct day labels; Count derives from it).
+$counts = @{}            # name -> int (distinct days pending)
 $grid   = @{}            # name -> HashSet[dateLabel]
 foreach ($rep in $reports) {
     foreach ($name in $rep.Reviewers) {
         if (-not $counts.ContainsKey($name)) { $counts[$name] = 0; $grid[$name] = New-Object System.Collections.Generic.HashSet[string] }
-        $counts[$name]++
         [void]$grid[$name].Add($rep.Label)
     }
 }
+foreach ($name in @($counts.Keys)) { $counts[$name] = $grid[$name].Count }
 $rows = @($counts.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $_.Key; Count = $_.Value; Pct = if ($total -gt 0) { [math]::Round($_.Value * 100.0 / $total, 0) } else { 0 } } } |
           Sort-Object -Property @{Expression='Count';Descending=$true}, @{Expression='Name';Descending=$false})
 # -MinMisses: drop reviewers with fewer than N total pending appearances (e.g. -MinMisses 2 leaves off
@@ -282,7 +288,15 @@ $reviewersBeforeMinMisses = $rows.Count
 if ($MinMisses -gt 1) { $rows = @($rows | Where-Object { $_.Count -ge $MinMisses }) }
 $excludedByMinMisses = $reviewersBeforeMinMisses - $rows.Count
 $shown = if ($Top -gt 0) { @($rows | Select-Object -First $Top) } else { $rows }
-$dailyCounts = @($reports | ForEach-Object { $_.Reviewers.Count })
+# Per-DAY pending counts (union across same-day report files), aligned with $dateLabels.
+$dayReviewerSets = @{}
+foreach ($rep in $reports) {
+    if (-not $dayReviewerSets.ContainsKey($rep.Label)) {
+        $dayReviewerSets[$rep.Label] = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+    }
+    foreach ($n in $rep.Reviewers) { [void]$dayReviewerSets[$rep.Label].Add($n) }
+}
+$dailyCounts = @($dateLabels | ForEach-Object { $dayReviewerSets[$_].Count })
 
 # ---- consecutive missed-review streaks (calendar-day adjacency) ----
 # Collapse to distinct calendar dates: a reviewer is "pending that day" if pending in any report that day.
@@ -311,7 +325,7 @@ $flaggedCount = @($streakRows | Where-Object Flagged).Count
 # ---- Console ----
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host ''
-    Write-Host "Pending-Reviewer scrape: $total report(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " (>= $MinMisses misses; $excludedByMinMisses single/low-miss reviewer(s) excluded)" })" -ForegroundColor Cyan
+    Write-Host "Pending-Reviewer scrape: $total day(s) from $($reports.Count) report file(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " (>= $MinMisses missed days; $excludedByMinMisses single/low-miss reviewer(s) excluded)" })" -ForegroundColor Cyan
     $shown | Select-Object Name, Count, @{N='OutOf';E={$total}}, @{N='Pct';E={"$($_.Pct)%"}} | Format-Table -AutoSize | Out-String | Write-Host
     if ($flaggedCount -gt 0) {
         Write-Host "Missed-review streaks (>= $streakThreshold consecutive day(s)): $flaggedCount reviewer(s) flagged" -ForegroundColor Yellow
@@ -357,10 +371,10 @@ table.report th{background:#f6f8fa;text-align:left}
 .note{color:#777;font-size:11px;margin-top:4px}
 </style></head><body>
 <h1>Pending / Undecided Reviewer Tracker</h1>
-<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total report(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " &nbsp;|&nbsp; min $MinMisses misses ($excludedByMinMisses excluded)" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
+<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total day(s) from $($reports.Count) report file(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " &nbsp;|&nbsp; min $MinMisses missed days ($excludedByMinMisses excluded)" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
 <div class='note'>Scraped from the day-end evidence reports' Pending/Undecided reviewer tables. A reviewer is counted once per report. (Bridge view until cache-based trending is fully wired.)</div>
 
-<h2>1. Chronic Pending &mdash; appearances out of $total report(s)</h2>
+<h2>1. Chronic Pending &mdash; days pending out of $total day(s)</h2>
 $barSvg
 
 <h2>2. Missed-Review Streak Flags &mdash; flagged at &ge; $streakThreshold consecutive day(s)</h2>

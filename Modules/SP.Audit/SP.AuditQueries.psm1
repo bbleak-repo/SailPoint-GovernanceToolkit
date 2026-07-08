@@ -2564,8 +2564,12 @@ function Get-SPSourceCampaignCoverage {
             if ($coverageData.ContainsKey($srcId) -and $coverageData[$srcId].Count -gt 0) {
                 $campList = @($coverageData[$srcId])
 
-                # Determine last campaign by date (string sort works for yyyy-MM-dd)
-                $sorted = @($campList | Sort-Object -Property CampaignDate -Descending)
+                # Determine last campaign by date (string sort works for yyyy-MM-dd).
+                # Scriptblock key: elements are HASHTABLES, and on PS 5.1
+                # Sort-Object -Property <name> cannot resolve hashtable keys -- every
+                # sort key was $null and insertion order won, so LastCampaign was
+                # whatever campaign happened to be enumerated first, not the latest.
+                $sorted = @($campList | Sort-Object -Property { $_['CampaignDate'] } -Descending)
                 $lastCamp     = $sorted[0].CampaignName
                 $lastCampDate = $sorted[0].CampaignDate
 
@@ -5570,7 +5574,14 @@ function Get-SPSourceAggregationHealth {
 
         if ($null -ne $lastSuccessfulCompleted) {
             try {
-                $successDt = [datetime]::Parse($lastSuccessfulCompleted)
+                # Normalize to UTC before differencing against $now = [datetime]::UtcNow.
+                # [datetime]::Parse converts the ISC 'Z'-suffixed timestamp to LOCAL Kind,
+                # and the raw tick subtraction ignored Kind -- DataFreshnessHours was
+                # skewed by the machine's UTC offset (false IsStale on UTC-negative
+                # hosts, hidden staleness on UTC-positive ones).
+                $successDt = [datetime]::Parse([string]$lastSuccessfulCompleted,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
                 $dataFreshnessHours = [math]::Round(($now - $successDt).TotalHours, 1)
             } catch { }
         }
@@ -6338,7 +6349,13 @@ function Get-SPReviewerDelegations {
                     $reviewerStats[$assignedReviewer] = @{
                         Assigned    = 0
                         Reassigned  = 0
-                        DelegationTimestamps = [System.Collections.Generic.List[datetime]]::new()
+                        # Hours from the OWNING campaign's created date to the delegation --
+                        # computed at collection time (below), where this audit's
+                        # $campaignCreated is in scope. The metrics loop runs after the
+                        # audit loop and used to difference raw timestamps against the
+                        # loop-leaked LAST campaign's created date, skewing (or zeroing)
+                        # AvgHoursBeforeDelegation for every reviewer.
+                        DelegationHours = [System.Collections.Generic.List[double]]::new()
                     }
                 }
                 $reviewerStats[$assignedReviewer]['Assigned']++
@@ -6375,9 +6392,12 @@ function Get-SPReviewerDelegations {
                     } catch { $completedDate = $null }
                 }
 
-                # Estimate delegation timestamp (use completedDate as proxy)
-                if ($null -ne $completedDate) {
-                    $reviewerStats[$assignedReviewer]['DelegationTimestamps'].Add($completedDate)
+                # Estimate delegation lead time (completedDate as proxy) against THIS
+                # audit's campaign created date (both UTC-normalized).
+                if ($null -ne $completedDate -and $null -ne $campaignCreated) {
+                    $delegHours = ($completedDate - $campaignCreated).TotalHours
+                    if ($delegHours -lt 0) { $delegHours = 0.0 }
+                    $reviewerStats[$assignedReviewer]['DelegationHours'].Add([double]$delegHours)
                 }
 
                 # Build reassignment chain
@@ -6470,17 +6490,14 @@ function Get-SPReviewerDelegations {
         $reassigned = $rs['Reassigned']
         $rate = if ($assigned -gt 0) { [math]::Round(($reassigned / $assigned) * 100, 1) } else { 0.0 }
 
-        # Average hours before delegation
+        # Average hours before delegation -- per-delegation lead times were computed
+        # at collection time against each delegation's OWN campaign created date.
         $avgHours = 0.0
-        $timestamps = $rs['DelegationTimestamps']
-        if ($timestamps.Count -gt 0 -and $null -ne $campaignCreated) {
-            # Rough estimate: average time from campaign start to delegation
+        $delegHoursList = $rs['DelegationHours']
+        if ($delegHoursList.Count -gt 0) {
             $totalHours = 0.0
-            foreach ($ts in $timestamps) {
-                $totalHours += ($ts - $campaignCreated).TotalHours
-            }
-            $avgHours = [math]::Round($totalHours / $timestamps.Count, 1)
-            if ($avgHours -lt 0) { $avgHours = 0.0 }
+            foreach ($h in $delegHoursList) { $totalHours += [double]$h }
+            $avgHours = [math]::Round($totalHours / $delegHoursList.Count, 1)
         }
 
         $rPatterns = [System.Collections.Generic.List[string]]::new()

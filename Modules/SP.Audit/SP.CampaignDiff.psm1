@@ -204,7 +204,11 @@ function Compare-SPCampaignSnapshots {
             $pRevId = if ($pc) { [string](Get-SPDiffProp $pc 'ReviewerId' '') } else { '' }
             $delta = $cMade - $pMade
             $isNew  = $cDone -and -not $pDone
-            $isNot  = ($cMade -eq 0)
+            # NotStarted requires actual work (items) that is genuinely untouched: a
+            # 0-item cert or an already-completed one is NOT "not started" -- reviewers
+            # holding signed empty certs used to be counted NotStarted AND placed on
+            # the Compliance.StalledReviewers leadership escalation list.
+            $isNot  = ($cMade -eq 0) -and ($cTot -gt 0) -and (-not $cDone)
             $isStall = (-not $cDone) -and ($delta -le 0) -and ($cTot -gt 0)
             # Reassigned: same cert, different effective reviewer than the prior capture.
             $isReassigned = ($pc -and $pRevId -and $cRevId -and ($pRevId -ne $cRevId))
