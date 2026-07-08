@@ -459,9 +459,11 @@ level of a report set (threaded by the band-filtered wrapper), links embed the t
 
 <h2>Verification summary</h2>
 <ul>
-<li><strong>Final full battery after Round 3 (all 49 non-GUI suites, Pester 5.7.1 on Windows PowerShell 5.1): 2192 passed / 3 failed / 13 skipped.</strong>
-The 3 failures (DE-03, TQ-01, TQ-04 &mdash; governance dashboard trend direction) fail <em>identically on master</em> (verified via a clean
-baseline worktree) &mdash; pre-existing, unrelated to this branch. Round 3 verification also includes: the reassignment diff simulation
+<li><strong>Final full battery after Round 4 (all 49 non-GUI suites, Pester 5.7.1 on Windows PowerShell 5.1): 2195 passed / 0 failed / 13 skipped &mdash; the first fully green run.</strong>
+The 3 failures present since before this work (DE-03, TQ-01, TQ-04 &mdash; governance dashboard trend direction) were shown NOT to be product
+defects: their fixtures pinned June-2026 timestamps that rotted out of the now-relative Last30Days window. All window-based dashboard-trend
+tests now use relative fixtures (and DE-01/05/06/07 + the vacuously-passing TQ-05 were rot-proofed with them); explicit month-comparison
+tests keep deliberately fixed dates. Round 3 verification also includes: the reassignment diff simulation
 (0 added / 0 removed, was 1/1), 121/121 key-suite tests, 252/252 report/leadership/reviewer/V4e tests, and the series suites re-run
 green (47/47) after their fixtures were updated to the new key semantics.</li>
 <li><strong>Round 2 full battery (Pester 5.7.1, Windows PowerShell 5.1): 553 passed / 0 failed / 0 skipped</strong> across 22 test files covering every touched module,
