@@ -224,6 +224,26 @@ Read-only campaign audit data retrieval:
 
 Internal helper: `Get-SPAuditSourceName` -- Module-scope cached source name resolver.
 
+### Scope key (snapshots / diff / series)
+
+A grant's cross-campaign identity is the **reassignment-stable scope key** built by
+`Get-SPStableScopeKey` (SP.CampaignDelta, exported):
+
+```
+IdentityId | AccessName (lowercased; AccessId only when the name is blank) | SourceId-else-SourceName
+```
+
+ISC regenerates access ids when a certification is reassigned to a new reviewer, so
+AccessId must never be the primary discriminator -- an id-first key made a reassigned
+grant diff as Removed+Added ("newly in scope" / "newly approved") on every reassignment.
+The user's primary key (`IdentityId`) plus the entitlement name and source are the stable
+coordinates. Consumers (diff maps, entitlement-history timelines, the V3 evidence script,
+`Invoke-SPCacheDiagnostic`) **recompute** the key from persisted item fields at load
+time, so snapshots written before this change stay comparable with new ones. Accepted
+trade-off: an entitlement RENAME churns the key once (removed+added in a single diff).
+The series engine (`Get-SPSeriesItemKey`, V4c/V4d/V4e) applies the same precedence, with
+`account:<nativeIdentity>` for ACCOUNT-type rows.
+
 ### SP.AuditReport.psm1
 
 Categorization and report generation:

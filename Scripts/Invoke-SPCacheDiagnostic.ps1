@@ -347,7 +347,7 @@ if (Test-Path $snapshotDir) {
 
             if ($blankKeys -gt 0) { Add-Finding 'ERROR' 'Snapshots' $latestSnap.Name "$blankKeys items with blank Key (diff engine will skip these)" }
             if ($dupSnapKeys -gt 0) { Add-Finding 'WARN' 'Snapshots' $latestSnap.Name "$dupSnapKeys duplicate keys (last-write-wins in diff map)" }
-            if ($accessIdMissing -gt 0) { Add-Finding 'WARN' 'Snapshots' $latestSnap.Name "$accessIdMissing items missing AccessId (key falls back to AccessName, less stable)" }
+            if ($accessIdMissing -gt 0) { Add-Finding 'INFO' 'Snapshots' $latestSnap.Name "$accessIdMissing items missing AccessId (harmless: the scope key is name-based; AccessId is only the fallback for blank names)" }
 
             # Cross-snapshot key drift (compare latest vs previous)
             if ($snapFiles.Count -ge 2) {
@@ -454,13 +454,28 @@ if (Test-Path $snapshotDir) {
             if (-not [string]::IsNullOrWhiteSpace($iid)) { $nByNameKey[$nameKey] = @{ AccessId = $aid; Key = $key; IdentityName = $(if ($null -ne $it.PSObject.Properties['IdentityName']) { [string]$it.IdentityName } else { '' }) } }
         }
 
+        # Mirror the diff engine: RECOMPUTE the reassignment-stable key from item fields
+        # (Get-SPStableScopeKey) rather than trusting the persisted Key -- older snapshots
+        # carry AccessId-first keys and comparing them against new name-based keys would
+        # make this diagnostic itself report false churn.
+        function _DiagStableKey($it) {
+            $k = Get-SPStableScopeKey `
+                    -IdentityId $(if ($null -ne $it.PSObject.Properties['IdentityId']) { [string]$it.IdentityId } else { '' }) `
+                    -AccessName $(if ($null -ne $it.PSObject.Properties['AccessName']) { [string]$it.AccessName } else { '' }) `
+                    -AccessId   $(if ($null -ne $it.PSObject.Properties['AccessId'])   { [string]$it.AccessId }   else { '' }) `
+                    -SourceId   $(if ($null -ne $it.PSObject.Properties['SourceId'])   { [string]$it.SourceId }   else { '' }) `
+                    -SourceName $(if ($null -ne $it.PSObject.Properties['SourceName']) { [string]$it.SourceName } else { '' })
+            if ([string]::IsNullOrWhiteSpace($k) -and $null -ne $it.PSObject.Properties['Key']) { $k = [string]$it.Key }
+            return $k
+        }
+
         $pByNameKey = @{}
         $pByKey = @{}
         foreach ($it in $pItems) {
             $iid = if ($null -ne $it.PSObject.Properties['IdentityId']) { [string]$it.IdentityId } else { '' }
             $aname = if ($null -ne $it.PSObject.Properties['AccessName']) { [string]$it.AccessName } else { '' }
             $aid = if ($null -ne $it.PSObject.Properties['AccessId']) { [string]$it.AccessId } else { '' }
-            $key = if ($null -ne $it.PSObject.Properties['Key']) { [string]$it.Key } else { '' }
+            $key = _DiagStableKey $it
             $nameKey = "$iid|$aname"
             if (-not [string]::IsNullOrWhiteSpace($iid)) { $pByNameKey[$nameKey] = @{ AccessId = $aid; Key = $key } }
             if (-not [string]::IsNullOrWhiteSpace($key)) { $pByKey[$key] = $true }
@@ -470,7 +485,7 @@ if (Test-Path $snapshotDir) {
         $diffAdded = 0; $falseAdded = 0; $accessIdChurn = 0
         $falseAddedIdentities = @{}
         foreach ($it in $nItems) {
-            $key = if ($null -ne $it.PSObject.Properties['Key']) { [string]$it.Key } else { '' }
+            $key = _DiagStableKey $it
             if ([string]::IsNullOrWhiteSpace($key)) { continue }
             if ($pByKey.ContainsKey($key)) { continue }  # key matches -- not "added"
 
@@ -507,11 +522,11 @@ if (Test-Path $snapshotDir) {
                 Add-Finding 'WARN' 'CrossCampaign' '' "  $($fi.Name) ($iid): $($fi.Count) false 'newly added' items"
             }
             if ($accessIdChurn -gt 0) {
-                Add-Finding 'ERROR' 'CrossCampaign' '' "$accessIdChurn of these have DIFFERENT AccessId between campaigns -- ISC is regenerating access IDs per campaign, causing key instability"
-                Add-Finding 'WARN' 'CrossCampaign' '' "ROOT CAUSE: The diff key uses AccessId which changes between daily campaigns for reassigned certifications. The diff engine should fall back to IdentityId+AccessName matching when AccessId changes."
+                Add-Finding 'ERROR' 'CrossCampaign' '' "$accessIdChurn of these have DIFFERENT AccessId between campaigns (ISC regenerates access ids on reassignment)"
+                Add-Finding 'WARN' 'CrossCampaign' '' "NOTE: the scope key is IdentityId + AccessName + Source (Get-SPStableScopeKey), so AccessId churn alone can NOT cause this -- these mismatches mean the entitlement NAME or SOURCE also changed between campaigns (rename, or a genuine cross-source move)."
             }
             else {
-                Add-Finding 'WARN' 'CrossCampaign' '' "AccessId is STABLE but keys still don't match -- check if SourceId changed or if items are genuinely from a different source"
+                Add-Finding 'WARN' 'CrossCampaign' '' "AccessId is STABLE but stable keys still don't match -- the entitlement name or source changed between campaigns (rename churns the name-based key once by design)"
             }
         }
         elseif ($diffAdded -gt 0) {

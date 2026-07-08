@@ -76,7 +76,7 @@ Describe "TQ-01: Get-SPGovernanceDashboardData returns KPIs with Direction" {
         # Create governance metrics with improving maturity and growing stale access
         $records = @(
             [ordered]@{
-                timestamp = (Get-Date '2026-06-01T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-20).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')   # relative: fixed dates rot out of the Last30Days window
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'      = 2.8
@@ -89,7 +89,7 @@ Describe "TQ-01: Get-SPGovernanceDashboardData returns KPIs with Direction" {
                 }
             },
             [ordered]@{
-                timestamp = (Get-Date '2026-06-05T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-5).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'      = 3.2
@@ -108,7 +108,7 @@ Describe "TQ-01: Get-SPGovernanceDashboardData returns KPIs with Direction" {
         # Create a campaign trend file with priv approval data
         $campRecords = @(
             [ordered]@{
-                timestamp    = (Get-Date '2026-06-01T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp    = (Get-Date).AddDays(-20).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 campaignId   = 'camp-tq01'
                 campaignName = 'TQ01 Test'
                 status       = 'ACTIVE'
@@ -120,7 +120,7 @@ Describe "TQ-01: Get-SPGovernanceDashboardData returns KPIs with Direction" {
                 }
             },
             [ordered]@{
-                timestamp    = (Get-Date '2026-06-05T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp    = (Get-Date).AddDays(-5).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 campaignId   = 'camp-tq01'
                 campaignName = 'TQ01 Test'
                 status       = 'ACTIVE'
@@ -194,6 +194,8 @@ Describe "TQ-03: Compare-SPGovernancePeriods returns Delta for each metric" {
                 }
             },
             [ordered]@{
+                # FIXED date on purpose: this test compares the explicit months
+                # '2026-05' vs '2026-06', so this record must stay in June.
                 timestamp = (Get-Date '2026-06-10T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 label     = $null
                 metrics   = [ordered]@{
@@ -237,7 +239,7 @@ Describe "TQ-04: Get-SPGovernanceAlerts flags declining metrics" {
         # Maturity declining, stale access growing
         $records = @(
             [ordered]@{
-                timestamp = (Get-Date '2026-05-20T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-25).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')   # relative: fixed dates rot out of the lookback window
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'    = 3.5
@@ -246,7 +248,7 @@ Describe "TQ-04: Get-SPGovernanceAlerts flags declining metrics" {
                 }
             },
             [ordered]@{
-                timestamp = (Get-Date '2026-06-01T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-12).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'    = 3.2
@@ -255,7 +257,7 @@ Describe "TQ-04: Get-SPGovernanceAlerts flags declining metrics" {
                 }
             },
             [ordered]@{
-                timestamp = (Get-Date '2026-06-10T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-2).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'    = 2.9
@@ -298,7 +300,7 @@ Describe "TQ-05: Get-SPGovernanceAlerts returns empty when all healthy" {
         # All metrics stable/improving
         $records = @(
             [ordered]@{
-                timestamp = (Get-Date '2026-06-01T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-15).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')   # relative: previously outside the window, passing vacuously
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'    = 3.0
@@ -308,7 +310,7 @@ Describe "TQ-05: Get-SPGovernanceAlerts returns empty when all healthy" {
                 }
             },
             [ordered]@{
-                timestamp = (Get-Date '2026-06-10T08:00:00').ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                timestamp = (Get-Date).AddDays(-2).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 label     = $null
                 metrics   = [ordered]@{
                     'maturity.overallScore'    = 3.2
