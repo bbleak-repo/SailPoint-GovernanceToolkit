@@ -6953,7 +6953,7 @@ function Test-SPSourceOnboardingReadiness {
 # Session-scoped in-memory cache.  Survives multiple calls within one PS session;
 # cleared on module reload.  Backed by the disk cache for cross-session reuse.
 # ---------------------------------------------------------------------------
-$script:_ItemMemCache = @{}   # key: campaignId -> @{Items; CachedAt; Status}
+$script:_ItemMemCache = @{}   # key: "campaignId|cachePath" -> @{Items; CachedAt; Status}
 
 function ConvertTo-SPCertRosterEntry {
     # ---------------------------------------------------------------------------
@@ -7159,14 +7159,19 @@ function Get-SPCachedCampaignItems {
     $itemsFile    = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
     $metaFile     = Join-Path $effectiveCachePath "items-$safeCampId.meta.json"
 
+    # Memory-cache key includes the resolved cache path: the disk layer is
+    # per-directory, so a session mixing -CachePath values (e.g. a scratch cache
+    # vs the default) must not serve one directory's items for the other.
+    $memKey = "$campId|$($effectiveCachePath.ToLowerInvariant())"
+
     # ---------------------------------------------------------------------------
     # Layer 1: memory cache check
     # -RefreshCache skips BOTH read layers (its contract is "skip read but DO
     # write" -- without this, a valid cache hit returned early and a permanent
     # COMPLETED campaign could never be refreshed at all).
     # ---------------------------------------------------------------------------
-    if (-not $NoCache -and -not $RefreshCache -and $script:_ItemMemCache.ContainsKey($campId)) {
-        $memEntry = $script:_ItemMemCache[$campId]
+    if (-not $NoCache -and -not $RefreshCache -and $script:_ItemMemCache.ContainsKey($memKey)) {
+        $memEntry = $script:_ItemMemCache[$memKey]
         $memValid = $memEntry.IsPermanent -or
                     ((Get-Date) - $memEntry.CachedAt).TotalMinutes -lt $effectiveTtl
         if ($memValid) {
@@ -7248,7 +7253,7 @@ function Get-SPCachedCampaignItems {
                     CertCount   = $meta.CertCount
                     IsPermanent = $meta.IsPermanent
                 }
-                $script:_ItemMemCache[$campId] = $memEntry2
+                $script:_ItemMemCache[$memKey] = $memEntry2
 
                 return @{
                     Success   = $true
@@ -7329,6 +7334,9 @@ function Get-SPCachedCampaignItems {
     # -NoCache: skip read AND write (preserve existing cache for comparison)
     # -RefreshCache: skip read but DO write (replace cache with fresh data)
     $writeToCache = $isCacheable -and (-not $NoCache -or $RefreshCache)
+    # Sticky provenance captured from the outgoing meta BEFORE it is removed below;
+    # the finalize blocks use these instead of re-reading the (now deleted) file.
+    $priorMetaFirstSeen = $null; $priorMetaCapturedActive = $false; $priorMetaAvailable = $false
     if ($writeToCache) {
         try {
             if (-not (Test-Path $effectiveCachePath)) {
@@ -7336,6 +7344,24 @@ function Get-SPCachedCampaignItems {
             }
             if (-not $resuming -and (Test-Path $itemsFile)) {
                 [System.IO.File]::Delete($itemsFile)
+            }
+            # Remove the stale meta too when starting a fresh (non-resume) refetch.
+            # Leaving it on disk paired a mid-fetch-killed PARTIAL items file with a
+            # valid-looking meta: the next run's layer-2 check loaded the truncated
+            # set -- and if the campaign had completed meanwhile, seal-on-transition
+            # stamped the partial data permanent with no self-heal. Without the meta,
+            # an interrupted fetch leaves the standard items-without-meta partial
+            # signature, which the resume path already handles. Sticky provenance
+            # (FirstSeenStatus / CapturedWhileActive) is captured first.
+            if (-not $resuming -and (Test-Path $metaFile)) {
+                try {
+                    $pmSnap = Get-Content $metaFile -Raw | ConvertFrom-Json
+                    if ($null -ne $pmSnap.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pmSnap.FirstSeenStatus)) { $priorMetaFirstSeen = [string]$pmSnap.FirstSeenStatus }
+                    elseif ($null -ne $pmSnap.PSObject.Properties['Status'] -and -not [string]::IsNullOrWhiteSpace([string]$pmSnap.Status)) { $priorMetaFirstSeen = [string]$pmSnap.Status }
+                    if ($null -ne $pmSnap.PSObject.Properties['CapturedWhileActive']) { $priorMetaCapturedActive = [bool]$pmSnap.CapturedWhileActive }
+                    $priorMetaAvailable = $true
+                } catch { }
+                [System.IO.File]::Delete($metaFile)
             }
         } catch { }
     }
@@ -7448,14 +7474,20 @@ function Get-SPCachedCampaignItems {
             Write-Host "  [Cache] RefreshCache mode -- fresh data overwrote existing cache." -ForegroundColor Cyan
         }
         try {
-            # WI-4 (G1): stamp capture-provenance onto the items meta. Recover a STICKY
-            # first-seen status from any prior meta still on disk (metaFile is only
-            # overwritten just below, so on a TTL/Refresh miss it is still present). When a
-            # COMPLETED campaign is first cached here WITHOUT a prior ACTIVE capture, the
-            # record is flagged Unverified so the report can warn that ISC post-completion
-            # data is being trusted without a sealed ACTIVE-state snapshot.
+            # WI-4 (G1): stamp capture-provenance onto the items meta. The STICKY
+            # first-seen status was captured from the outgoing meta BEFORE it was
+            # removed at fetch start (B5: the stale meta can no longer sit next to a
+            # partial items file); fall back to a disk read for paths that did not
+            # delete it (e.g. resume). When a COMPLETED campaign is first cached here
+            # WITHOUT a prior ACTIVE capture, the record is flagged Unverified so the
+            # report can warn that ISC post-completion data is being trusted without
+            # a sealed ACTIVE-state snapshot.
             $priorFirstSeen = $null; $priorCapturedActive = $false
-            if (Test-Path $metaFile) {
+            if ($priorMetaAvailable) {
+                $priorFirstSeen      = $priorMetaFirstSeen
+                $priorCapturedActive = $priorMetaCapturedActive
+            }
+            elseif (Test-Path $metaFile) {
                 try {
                     $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
                     if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
@@ -7508,10 +7540,15 @@ function Get-SPCachedCampaignItems {
             # Ensure an empty items file exists so the layer-2 (itemsFile AND metaFile) check HITs.
             [System.IO.File]::WriteAllText($itemsFile, '', $utf8NoBom)
 
-            # Recover a STICKY first-seen status from any prior meta (same logic as the
-            # >0-item finalize block) so a previously-ACTIVE seal stays VERIFIED.
+            # Recover a STICKY first-seen status (same logic as the >0-item finalize
+            # block): prefer the provenance captured before the meta was removed at
+            # fetch start, falling back to a disk read.
             $priorFirstSeen = $null; $priorCapturedActive = $false
-            if (Test-Path $metaFile) {
+            if ($priorMetaAvailable) {
+                $priorFirstSeen      = $priorMetaFirstSeen
+                $priorCapturedActive = $priorMetaCapturedActive
+            }
+            elseif (Test-Path $metaFile) {
                 try {
                     $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
                     if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
@@ -7565,7 +7602,7 @@ function Get-SPCachedCampaignItems {
             CertCount   = $certs.Count
             IsPermanent = $isPermanent
         }
-        $script:_ItemMemCache[$campId] = $memEntry3
+        $script:_ItemMemCache[$memKey] = $memEntry3
     }
 
     return @{
@@ -8096,10 +8133,17 @@ function Clear-SPAuditItemCache {
             $clearedTargets += 'memory'
             Write-Host "  Memory cache cleared." -ForegroundColor DarkGray
         }
-        elseif ($script:_ItemMemCache.ContainsKey($CampaignId)) {
-            $script:_ItemMemCache.Remove($CampaignId)
-            $clearedTargets += "memory($CampaignId)"
-            Write-Host "  Memory cache cleared for $CampaignId." -ForegroundColor DarkGray
+        else {
+            # Keys are "campaignId|cachePath" (plus any legacy bare-id entries) --
+            # remove every entry for this campaign across all cache paths.
+            $toRemove = @($script:_ItemMemCache.Keys | Where-Object {
+                $_ -eq $CampaignId -or $_ -like "$CampaignId|*"
+            })
+            foreach ($k in $toRemove) { $script:_ItemMemCache.Remove($k) }
+            if ($toRemove.Count -gt 0) {
+                $clearedTargets += "memory($CampaignId)"
+                Write-Host "  Memory cache cleared for $CampaignId." -ForegroundColor DarkGray
+            }
         }
     }
 
