@@ -110,8 +110,13 @@ function Build-SPQueryString {
 
     $pairs = [System.Collections.Generic.List[string]]::new()
     foreach ($key in $QueryParams.Keys) {
-        $encodedKey   = [System.Uri]::EscapeDataString($key)
-        $encodedValue = [System.Uri]::EscapeDataString($QueryParams[$key].ToString())
+        # Skip null values (a conditionally-built filter like @{filters=$null} used
+        # to NRE on .ToString() here -- outside the retry try/catch, so the caller
+        # got a raw throw instead of the normalized @{Success=$false} envelope).
+        $value = $QueryParams[$key]
+        if ($null -eq $value) { continue }
+        $encodedKey   = [System.Uri]::EscapeDataString([string]$key)
+        $encodedValue = [System.Uri]::EscapeDataString($value.ToString())
         $pairs.Add("$encodedKey=$encodedValue")
     }
 
@@ -469,10 +474,19 @@ function Invoke-SPApiRequest {
             # connection reset). These are exactly the kind of thing a retry
             # will often paper over; not retrying makes long-running audits
             # fragile on flaky networks.
+            # Method-aware: 429 is rejected BEFORE processing, so any method may
+            # retry it. 5xx and status=0 (which includes a client-side TimeoutSec
+            # expiry) can occur AFTER the server fully processed the call --
+            # blind re-sends of non-idempotent methods risked duplicate campaign
+            # creation / re-submitted decision batches, so only idempotent
+            # methods (per HTTP semantics) retry those.
+            $isIdempotentMethod = $Method -in @('GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE')
             $shouldRetry = (
                 $statusCode -eq 429 -or
-                ($statusCode -ge 500 -and $statusCode -le 599) -or
-                $statusCode -eq 0
+                ($isIdempotentMethod -and (
+                    ($statusCode -ge 500 -and $statusCode -le 599) -or
+                    $statusCode -eq 0
+                ))
             )
 
             if ($shouldRetry -and $attempt -lt $maxRetries) {
