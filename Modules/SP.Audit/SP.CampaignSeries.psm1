@@ -896,12 +896,36 @@ function Get-SPSeriesAttestationDelta {
                 }
             }
 
+            # Instance calendar date for first-approval reporting: the campaign's own
+            # period-token date (daily campaigns: the campaign's day; invariant-culture
+            # parse, matching ConvertTo-SPSeriesChronoKey), falling back to CachedAt.
+            # '' when neither resolves (e.g. synthetic test instances).
+            $instDate = ''
+            $ptok = [string](Get-SPSeriesProp $inst 'PeriodToken' '')
+            if (-not [string]::IsNullOrWhiteSpace($ptok)) {
+                $pdt = [datetime]::MinValue
+                if ([datetime]::TryParse($ptok, [System.Globalization.CultureInfo]::InvariantCulture,
+                                         [System.Globalization.DateTimeStyles]::None, [ref]$pdt)) {
+                    $instDate = $pdt.ToString('yyyy-MM-dd')
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($instDate)) {
+                $instCachedAt = [string](Get-SPSeriesProp $inst 'CachedAt' '')
+                if (-not [string]::IsNullOrWhiteSpace($instCachedAt)) {
+                    try {
+                        $instDate = ([datetime]::Parse($instCachedAt, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd')
+                    } catch { }
+                }
+            }
+
             $instMaps.Add([pscustomobject]@{
                     EffectiveOrderIndex = [int]$effOrder
                     CampaignId          = $campaignId
                     CampaignName        = $campaignName
                     Status              = $status
                     Unverified          = $instUnverified
+                    InstanceDate        = $instDate
                     States              = $map
                 })
         }
@@ -940,6 +964,7 @@ function Get-SPSeriesAttestationDelta {
             # Timeline across ALL instances (Present flag distinguishes a gap from a real entry).
             $timeline = New-Object System.Collections.Generic.List[object]
             $firstSeen = -1; $lastSeen = -1; $firstGenuineApproval = -1
+            $firstApprovalCampaign = ''; $firstApprovalDate = ''
             $itemUnverified = $false
             $anyGenuineDecisionAll = $false
             $hasApproved = $false; $hasRevoked = $false
@@ -961,6 +986,18 @@ function Get-SPSeriesAttestationDelta {
                     }
                     if ($firstGenuineApproval -lt 0 -and [bool](Get-SPSeriesProp $st 'IsGenuineApproval' $false)) {
                         $firstGenuineApproval = $im.EffectiveOrderIndex
+                        $firstApprovalCampaign = [string]$im.CampaignName
+                        # First-approval DATE: the reviewer's own decision timestamp on the
+                        # item when present (the honest moment of approval), else the
+                        # instance's calendar date (the campaign's day for daily series).
+                        $fadRaw = [string](Get-SPSeriesProp $st 'DecisionDate' '')
+                        if (-not [string]::IsNullOrWhiteSpace($fadRaw)) {
+                            try {
+                                $firstApprovalDate = ([datetime]::Parse($fadRaw, [System.Globalization.CultureInfo]::InvariantCulture,
+                                    [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd')
+                            } catch { $firstApprovalDate = $fadRaw }
+                        }
+                        if ([string]::IsNullOrWhiteSpace($firstApprovalDate)) { $firstApprovalDate = [string]$im.InstanceDate }
                     }
                 }
                 $timeline.Add([ordered]@{
@@ -1027,6 +1064,12 @@ function Get-SPSeriesAttestationDelta {
                 FirstSeenOrderIndex            = [int]$firstSeen
                 LastSeenOrderIndex             = [int]$lastSeen
                 FirstGenuineApprovalOrderIndex = [int]$firstGenuineApproval
+                # First-approval provenance (V4f): which campaign instance first carried a
+                # genuine approval for this grant, and when. Date = the item's own
+                # DecisionDate in that instance when available, else the instance's day.
+                # '' / -1 when the item has never been genuinely approved in the window.
+                FirstGenuineApprovalCampaign   = [string]$firstApprovalCampaign
+                FirstGenuineApprovalDate       = [string]$firstApprovalDate
                 CurrentHonestDecision          = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'HonestDecision' '') } else { '' }
                 CurrentIsGenuineApproval       = if ($null -ne $currentState) { [bool](Get-SPSeriesProp $currentState 'IsGenuineApproval' $false) } else { $false }
                 CurrentReviewerName            = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'ReviewerName' '') } else { '' }
