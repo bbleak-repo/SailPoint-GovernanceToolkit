@@ -208,6 +208,32 @@ only.
    Legacy unstamped records keep the kept-and-flagged behavior.
 4. Regression tests: `Tests/SP.DailyEvidenceV7Reconcile.Tests.ps1` (suspect-kept +
    reconcile-OK, v2 gate, guard-fires-on-dropped-sibling).
+5. **Reviewer accountability: absence is not inaction** (follow-up in the same
+   branch). Daily campaigns drop a reviewer from the roster once their items are
+   all decided, revoked, or reassigned -- V7 was conflating that absence with
+   not attesting:
+   - Chart 4 (Completion Trajectory): a reviewer absent from today's campaign
+     rendered as `STALLED 0%` with a red row. Now: `--` cells and
+     "Completed -- out of scope since MM/DD" (green) or "Out of scope since
+     MM/DD (items moved/revoked)" (grey). A present reviewer with zero items
+     shows "No items today", never STALLED.
+   - Chart 5 (Activity Heatmap): absent days counted as 0-decision days and any
+     zero-activity row went red. Now: absent days render as dotted outline cells,
+     and a row goes red only when the reviewer left work undone on an in-scope
+     day (Pending > 0) with zero decisions all window.
+   - Chart 13 (Compliance Categorization): classified purely on decisions/day, so
+     finished reviewers aged into "Inactive N days" -> "Absent (needs
+     reassignment?)" and no-decision-needed reviewers became "Never Complied".
+     Rebuilt on ACCOUNTABLE days (present in that day's campaign with Total > 0;
+     missed = day ended with Pending > 0): No Items In Window / Completed--out of
+     scope / Left scope with items pending / Compliant / Missed 1-2 recent (amber)
+     / Chronic >=3 consecutive (red) / Never Complied (red; >=2 accountable days,
+     all missed, zero decisions).
+   - Risk matrix + console STALLED list: zero-item reviewers (Completion=0 by
+     construction) no longer count as stalled.
+   - Regression test DV7R-05: a reviewer who finishes 100% then leaves scope and a
+     zero-item reviewer must never render STALLED / Never Complied, while a
+     genuinely idle reviewer with pending items all window is still caught.
 
 ### Verify in production after deploying the new zip
 

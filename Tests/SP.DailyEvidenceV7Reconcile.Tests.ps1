@@ -7,6 +7,8 @@
     DV7R-02: schemaVersion=2 records are never flagged suspect
     DV7R-03: the reconciliation guard FIRES when a same-day sibling campaign is dropped
     DV7R-04: first-approval engine fields (V4f) -- date/campaign set, auto-approve never counts
+    DV7R-05: reviewer accountability -- absence is not inaction (finished/zero-item
+             reviewers never stalled or non-compliant; true non-complier still caught)
 #>
 
 BeforeAll {
@@ -17,7 +19,8 @@ BeforeAll {
     $script:V7Path = Join-Path $script:ToolkitRoot 'Scripts\Invoke-SPDailyEvidenceReportV7.ps1'
 
     function New-DV7Record {
-        param([string]$Date, [string]$CampId, [int]$Revoked, [int]$Pending, [int]$SchemaVersion = 0)
+        param([string]$Date, [string]$CampId, [int]$Revoked, [int]$Pending, [int]$SchemaVersion = 0,
+              [array]$Reviewers = @(), [int]$ReviewersTotal = 10)
         $appr = 200 - $Revoked - $Pending
         $comp = if ($Pending -eq 0) { 100 } else { [math]::Round((($appr + $Revoked) / 200) * 100, 1) }
         $o = [ordered]@{}
@@ -29,11 +32,19 @@ BeforeAll {
                                      created = "${Date}T06:00:00Z"; deadline = ''; completed = '2026-06-30T23:00:00Z' }
         $o['summary']  = [ordered]@{ totalItems = 200; approved = $appr; revoked = $Revoked; pending = $Pending
                                      completionPct = $comp; completionPctByReviewer = $comp
-                                     reviewersTotal = 10; reviewersSigned = 10; reviewersNotStarted = 0; reviewersInProgress = 0
+                                     reviewersTotal = $ReviewersTotal; reviewersSigned = 10; reviewersNotStarted = 0; reviewersInProgress = 0
                                      privilegedTotal = 10; privilegedApproved = 9; privilegedRevoked = 1; privilegedPending = 0
                                      distinctIdentities = 150; distinctSources = 2 }
-        $o['reviewers'] = @(); $o['sources'] = @(); $o['diff'] = [ordered]@{ newlyApprovedCount = 0; newlyDecidedCount = 0 }
+        $o['reviewers'] = @($Reviewers); $o['sources'] = @(); $o['diff'] = [ordered]@{ newlyApprovedCount = 0; newlyDecidedCount = 0 }
         return ($o | ConvertTo-Json -Depth 6 -Compress)
+    }
+
+    function New-DV7Reviewer {
+        param([string]$Name, [int]$Total, [int]$Approved = 0, [int]$Revoked = 0, [int]$Pending = 0, [bool]$Signed = $false)
+        $cp = if ($Total -gt 0) { [math]::Round((($Approved + $Revoked) / $Total) * 100, 1) } else { 0 }
+        return [ordered]@{ name = $Name; identityId = "id-$Name"; email = "$Name@example.com"; classification = 'Standard'
+                           total = $Total; approved = $Approved; revoked = $Revoked; pending = $Pending
+                           completionPct = $cp; signed = $Signed; phase = 'ACTIVE' }
     }
 
     function Invoke-DV7 {
@@ -114,6 +125,64 @@ Describe 'DV7R-03: reconciliation guard fires on a dropped same-day sibling' {
         $console | Should -Match 'RECONCILIATION WARNING'
         $console | Should -Match 'Delta: revoked 7'
         $console | Should -Match 'same-day sibling campaign dropped by one-record-per-day resolution'
+    }
+}
+
+Describe 'DV7R-05: reviewer accountability -- absence is not inaction' {
+    It 'never marks finished or zero-item reviewers stalled/non-compliant, and still catches the true non-complier' {
+        $mDir = Join-Path $TestDrive 'dv7r05'
+        New-Item -ItemType Directory -Force $mDir | Out-Null
+        $outDir = Join-Path $TestDrive 'dv7r05-out'
+
+        # FinisherFran: finishes 100% on day 2, ABSENT day 3 (scope completed) -> never stalled.
+        # ZeroZane:     present all days with ZERO items -> nothing to attest, never stalled.
+        # SlackerSam:   10 items pending all 3 days, zero decisions -> the real non-complier.
+        $franD1 = New-DV7Reviewer -Name 'FinisherFran' -Total 10 -Approved 5 -Pending 5
+        $franD2 = New-DV7Reviewer -Name 'FinisherFran' -Total 10 -Approved 9 -Revoked 1 -Pending 0 -Signed $true
+        $zane   = New-DV7Reviewer -Name 'ZeroZane' -Total 0
+        $sam    = New-DV7Reviewer -Name 'SlackerSam' -Total 10 -Pending 10
+        $lines = @(
+            (New-DV7Record -Date '2026-06-01' -CampId 'c1' -Revoked 10 -Pending 20 -SchemaVersion 2 -Reviewers @($franD1, $zane, $sam) -ReviewersTotal 3),
+            (New-DV7Record -Date '2026-06-02' -CampId 'c2' -Revoked 15 -Pending 15 -SchemaVersion 2 -Reviewers @($franD2, $zane, $sam) -ReviewersTotal 3),
+            (New-DV7Record -Date '2026-06-03' -CampId 'c3' -Revoked 20 -Pending 10 -SchemaVersion 2 -Reviewers @($zane, $sam) -ReviewersTotal 2)
+        )
+        Set-Content (Join-Path $mDir 'daily-metrics.jsonl') -Value ($lines -join "`n") -Encoding UTF8
+
+        $console = Invoke-DV7 -MetricsDir $mDir -OutDir $outDir
+        $console | Should -Match 'Reconciliation OK'
+
+        $htmlFile = @(Get-ChildItem $outDir -Filter 'daily-evidence-v7-*.html' | Sort-Object LastWriteTime -Descending)[0]
+        $htmlFile | Should -Not -BeNullOrEmpty
+        $html = Get-Content $htmlFile.FullName -Raw
+        $htmlLines = $html -split "`r?`n"
+
+        # FinisherFran finished and left scope: green out-of-scope status, never STALLED / Never Complied.
+        $fran = (@($htmlLines | Where-Object { $_ -match 'FinisherFran' }) -join ' ')
+        $fran | Should -Not -BeNullOrEmpty
+        $fran | Should -Match 'Completed -- out of scope since 06/02'
+        $fran | Should -Not -Match 'STALLED'
+        $fran | Should -Not -Match 'Never Complied'
+
+        # ZeroZane never had items: informational only, never STALLED anywhere.
+        $zaneRows = (@($htmlLines | Where-Object { $_ -match 'ZeroZane' }) -join ' ')
+        $zaneRows | Should -Not -BeNullOrEmpty
+        $zaneRows | Should -Match 'No items'
+        $zaneRows | Should -Not -Match 'STALLED'
+        $zaneRows | Should -Not -Match 'Never Complied'
+
+        # SlackerSam IS caught: Never Complied across all 3 accountable days, and the
+        # compliance KPI counts exactly one such reviewer.
+        $samRows = (@($htmlLines | Where-Object { $_ -match 'SlackerSam' }) -join ' ')
+        $samRows | Should -Match 'Never Complied \(3 of 3 accountable days missed, zero decisions\)'
+        $html | Should -Match "'>1</span><span class='l'>Never Complied<"
+
+        # Risk matrix (mixed reviewer counts force it to render): newest day shows
+        # 1 stalled of 2 reviewers -- Sam only; Zane's zero-item row is excluded.
+        $html | Should -Match '>1 / 2</td>'
+        $html | Should -Not -Match '>2 / 2</td>'
+
+        # Console stalled list names exactly the one truly stalled reviewer.
+        $console | Should -Match 'STALLED:\s+1 reviewer\(s\): SlackerSam'
     }
 }
 
