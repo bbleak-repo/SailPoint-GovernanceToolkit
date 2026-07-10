@@ -409,18 +409,27 @@ Write-Host ''
 
 Write-Host '  Step 2: Calendar-day resolution' -ForegroundColor Cyan
 
-# Step 2a: Detect suspect records (pre-fix inflated data)
+# Step 2a: Detect suspect records (pre-fix inflated data).
+# schemaVersion gate: V4b stamps schemaVersion=2 on records whose counts are
+# CANONICAL (idNowAutoApproved force-signs are demoted to Pending at write time).
+# A v2+ COMPLETED record with pending=0 / ~100% therefore means the reviewers
+# GENUINELY finished -- the inflated-data signature is impossible by
+# construction, so v2+ records are never flagged suspect. Only legacy
+# (unstamped) records can carry pre-canonical inflated counts.
 $suspectCount = 0
 foreach ($rec in $allRecords) {
     $recIsSuspect = $false
     try {
-        $campStatus = [string]$rec.campaign.status
-        $sm = $rec.summary
-        $pendingVal = [int](Get-V7NumericProp $sm 'pending' 0)
-        $compPct = [double](Get-V7NumericProp $sm 'completionPct' 0)
-        if ($campStatus -eq 'COMPLETED' -and $pendingVal -eq 0 -and $compPct -ge 99.5) {
-            $recIsSuspect = $true
-            $suspectCount++
+        $schemaV = [int](Get-V7NumericProp $rec 'schemaVersion' 0)
+        if ($schemaV -lt 2) {
+            $campStatus = [string]$rec.campaign.status
+            $sm = $rec.summary
+            $pendingVal = [int](Get-V7NumericProp $sm 'pending' 0)
+            $compPct = [double](Get-V7NumericProp $sm 'completionPct' 0)
+            if ($campStatus -eq 'COMPLETED' -and $pendingVal -eq 0 -and $compPct -ge 99.5) {
+                $recIsSuspect = $true
+                $suspectCount++
+            }
         }
     } catch { }
     # Tag the record
@@ -671,6 +680,62 @@ if ($dayCount -eq 0) {
 $dailyData = @()
 foreach ($dk in $dayKeys) {
     $dailyData += $calendarDays[$dk]
+}
+
+# ---------------------------------------------------------------------------
+# RECONCILIATION GUARD: what the report will DISPLAY must add up to what the
+# JSONL actually CONTAINS for this window. The pre-fix suspect filter silently
+# deleted 18 of 22 June days in production (the '399 missing revokes' bug,
+# docs/BUG-V7-REVOKED-GAP-20260710.md) and nothing in the output said so.
+# Truth basis: all in-window records deduped by captureDate|campaignId keeping
+# the latest captureTimestamp (mirrors V4b's own write-dedup). Every truth
+# record NOT represented in $dailyData is listed with its counts and a reason,
+# and the total delta is printed -- silent loss is now structurally impossible.
+# ---------------------------------------------------------------------------
+$truthByKey = @{}
+foreach ($rec in $allRecords) {
+    $tKey = "$([string]$rec.captureDate)|$([string]$rec.campaign.id)"
+    if (-not $truthByKey.ContainsKey($tKey) -or
+        ([string]$rec.captureTimestamp) -gt ([string]$truthByKey[$tKey].captureTimestamp)) {
+        $truthByKey[$tKey] = $rec
+    }
+}
+$truthRevoked = 0; $truthApproved = 0; $truthPending = 0
+foreach ($rec in $truthByKey.Values) {
+    $truthRevoked  += [int](Get-V7NumericProp $rec.summary 'revoked' 0)
+    $truthApproved += [int](Get-V7NumericProp $rec.summary 'approved' 0)
+    $truthPending  += [int](Get-V7NumericProp $rec.summary 'pending' 0)
+}
+$shownKeys = @{}
+$shownRevoked = 0; $shownApproved = 0; $shownPending = 0
+foreach ($d in $dailyData) {
+    $shownKeys["$($d.Date)|$($d.CampaignId)"] = $true
+    $shownRevoked  += [int]$d.Revoked
+    $shownApproved += [int]$d.Approved
+    $shownPending  += [int]$d.Pending
+}
+if ($shownRevoked -ne $truthRevoked -or $shownApproved -ne $truthApproved -or $shownPending -ne $truthPending) {
+    Write-Host "    RECONCILIATION WARNING: displayed day set does not account for all in-window JSONL records." -ForegroundColor Red
+    Write-Host "      JSONL truth (deduped): approved=$truthApproved revoked=$truthRevoked pending=$truthPending" -ForegroundColor Red
+    Write-Host "      Report will display:   approved=$shownApproved revoked=$shownRevoked pending=$shownPending" -ForegroundColor Red
+    Write-Host "      Delta: revoked $($truthRevoked - $shownRevoked), approved $($truthApproved - $shownApproved), pending $($truthPending - $shownPending)" -ForegroundColor Red
+    foreach ($tKey in ($truthByKey.Keys | Sort-Object)) {
+        if ($shownKeys.ContainsKey($tKey)) { continue }
+        $rec = $truthByKey[$tKey]
+        $reason = 'not represented after calendar-day resolution'
+        $isSusp = $false; try { $isSusp = [bool]$rec._isSuspect } catch { }
+        if ($isSusp) { $reason = 'suspect record superseded by an honest same-day capture' }
+        elseif ($shownKeys.Keys -match ('^' + [regex]::Escape([string]$rec.captureDate) + '\|')) {
+            $reason = 'same-day sibling campaign dropped by one-record-per-day resolution'
+        }
+        Write-Host ("      EXCLUDED: {0} '{1}' (approved={2} revoked={3} pending={4}) -- {5}" -f `
+            [string]$rec.captureDate, [string]$rec.campaign.name, `
+            [int](Get-V7NumericProp $rec.summary 'approved' 0), [int](Get-V7NumericProp $rec.summary 'revoked' 0), `
+            [int](Get-V7NumericProp $rec.summary 'pending' 0), $reason) -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "    Reconciliation OK: displayed totals match in-window JSONL (approved=$truthApproved revoked=$truthRevoked pending=$truthPending)" -ForegroundColor DarkGreen
 }
 
 # Build reviewer list (distinct across all days, sorted alphabetically)

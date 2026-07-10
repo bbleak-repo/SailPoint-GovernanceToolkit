@@ -1010,6 +1010,11 @@ try {
         $diffData.newlyDecidedCount = $v4NewlyDecided.Count
 
         $metricsRecord = [ordered]@{
+            # schemaVersion 2 = counts are CANONICAL (idNowAutoApproved force-signs
+            # already demoted to Pending by Group-SPAuditDecisions). V7 uses this to
+            # skip the legacy 'suspect inflated data' heuristic: a v2+ COMPLETED
+            # record with pending=0 means the reviewers genuinely finished.
+            schemaVersion    = 2
             captureDate      = $captureDate
             captureTimestamp  = $captureTs
             correlationId    = $correlationID
