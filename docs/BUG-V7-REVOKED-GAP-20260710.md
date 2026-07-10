@@ -3,7 +3,7 @@
 **Date:** 2026-07-10
 **Reporter:** Production testing -- June full-month report comparison
 **Severity:** Medium (data display, not data loss -- V4e has correct numbers)
-**Status:** Open -- needs investigation
+**Status:** RESOLVED 2026-07-10 -- root cause: stale deployed build (see Resolution)
 
 ---
 
@@ -159,3 +159,74 @@ in the console output.
 - `Modules/SP.Audit/SP.AuditReportCore.psm1` -- `Group-SPAuditDecisions` (idNowAutoApproved)
 - `Modules/SP.Audit/SP.CampaignSeries.psm1` -- `Resolve-SPSeriesItemState`, `Get-SPSeriesAttestationDelta`
 - `Audit/metrics/daily-metrics.jsonl` -- V4b output, V7 input
+
+---
+
+## RESOLUTION (2026-07-10)
+
+### Root cause: production runs V7 from a stale dist zip
+
+The dist zips at the repo root were rebuilt **2026-07-07** -- one day BEFORE the
+V7 suspect-filter fix merged to master (PRs #21/#22, 2026-07-08). The shipped V7
+still contains the OLD unconditional suspect drop:
+
+> any record with `status=COMPLETED && pending==0 && completionPct>=99.5` is
+> silently excluded unless `-IncludeSuspect`.
+
+V4b writes **canonical** counts (force-sign `idNowAutoApproved` items are demoted
+to Pending at write time), so that signature is exactly what a daily campaign
+looks like when the reviewers **genuinely finished it** -- the shipped V7 deleted
+your best days and kept only the force-closed stragglers (canonical pending > 0).
+No same-day campaign collisions were involved; the one-campaign-per-workday model
+holds.
+
+**Reproduced deterministically** with a production-shaped fixture (22 unique June
+workdays: 18 genuinely finished + 4 force-closed, truth = 397 revoked):
+
+| Build | Days kept | Revoked displayed |
+|---|---|---|
+| Shipped 7/7 zip V7 | 4 of 22 | **76** |
+| Current master V7 | 22 of 22 | **397** (correct) |
+
+Hypotheses 1 (classifier divergence) and 4 (ACTIVE-protection) were ruled out by
+code inspection: V4b's JSONL and V4e's series engine both classify through
+`ConvertTo-SPCanonicalDecision`, and the auto-approve demotion is APPROVE-branch
+only.
+
+### Fixes shipped (branch fix/v7-revoked-gap)
+
+1. **Deploy the rebuilt dist zips** (rebuilt from current master in this branch) --
+   this is the actual production fix.
+2. **V7 reconciliation guard**: after calendar-day resolution, V7 compares the
+   totals it will display against the in-window JSONL truth (deduped by
+   `captureDate|campaignId`, latest capture wins). Any gap prints a RED warning
+   with the exact delta and one line per excluded record with the reason.
+   Silent loss of records is now structurally impossible.
+3. **schemaVersion gate**: V4b stamps `schemaVersion: 2` on JSONL records (counts
+   are canonical by construction); V7 skips the legacy suspect heuristic for v2+
+   records, so genuinely-finished days are no longer mislabeled "suspect".
+   Legacy unstamped records keep the kept-and-flagged behavior.
+4. Regression tests: `Tests/SP.DailyEvidenceV7Reconcile.Tests.ps1` (suspect-kept +
+   reconcile-OK, v2 gate, guard-fires-on-dropped-sibling).
+
+### Verify in production after deploying the new zip
+
+```powershell
+.\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -StartDate '2026-06-01' -EndDate '2026-06-30'
+# Expect: "23 records -> 23 calendar day(s)" and
+#         "Reconciliation OK: displayed totals match in-window JSONL (...)"
+# The June revoked total should now match V4e's per-instance table sum.
+```
+
+### Related outcomes
+
+- The **93 recurring disconnected-app revokes** are confirmed operational, not a
+  bug (remediation backlog -- same grant re-revoked in each subsequent campaign
+  until the downstream admin processes it). Escalate to the app owner; the new
+  V4f first-approval timeline pattern can be extended to "first revoked / still
+  revoked N campaigns later" if a report surface is wanted.
+- New **V4f report** (`Invoke-SPDailyEvidenceReportV4f.ps1`): V4e plus
+  "Approved Items -- First-Approval Timeline" -- when each currently-approved
+  grant was FIRST genuinely approved (item DecisionDate, else campaign day) and
+  which grants became approved mid-window. Auto-approved records can never
+  register as a first approval.
