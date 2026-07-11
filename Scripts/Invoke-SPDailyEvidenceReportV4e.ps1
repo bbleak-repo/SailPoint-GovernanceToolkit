@@ -295,6 +295,11 @@ Write-Host "    Series found: $($seriesList.Count) (instances kept: $($seriesRes
 
 #region Step 2: Opt-in fuzzy consolidation (default OFF)
 
+if ($SimilarityThreshold -le 0 -or $seriesList.Count -le 1) {
+    # Always show the step so a run reads 1 -> 2 -> 3 (previously the skipped step
+    # printed nothing and the jump from Step 1 to Step 3 looked like a fault).
+    Write-Host '  Step 2: Fuzzy stem consolidation -- skipped (off by default; enable with -SimilarityThreshold)' -ForegroundColor DarkGray
+}
 if ($SimilarityThreshold -gt 0 -and $seriesList.Count -gt 1) {
     Write-Host "  Step 2: Opt-in fuzzy stem consolidation (threshold=$SimilarityThreshold)" -ForegroundColor Cyan
     $stemToSeries = @{}
@@ -400,13 +405,23 @@ Write-Host '  Step 3: Compute series attestation delta' -ForegroundColor Cyan
 
 $seriesResults = New-Object System.Collections.Generic.List[object]
 foreach ($series in $seriesList) {
+    $seriesSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $instCountSeries = @($series.Instances).Count
+    Write-Host "    [$($series.NormalizedStem)] loading $instCountSeries instance(s) from cache..." -ForegroundColor DarkGray
     # Materialize each instance for the PURE engine (the report layer does the IO).
     $deltaInstances = New-Object System.Collections.Generic.List[object]
+    $loadIdx = 0
+    $loadedItemTotal = 0
     foreach ($inst in @($series.Instances)) {
+        $loadIdx++
         $loadedItems = @()
         $loadedRoster = @()
         try { $loadedItems = @(& $inst.LoadItems) } catch { $loadedItems = @() }
         try { $loadedRoster = @(& $inst.LoadRoster) } catch { $loadedRoster = @() }
+        # LoadItems returns `, $list.ToArray()` so @() may wrap ONE element that is the array.
+        $loadedCount = if ($loadedItems.Count -eq 1 -and ($loadedItems[0] -is [System.Collections.IEnumerable]) -and ($loadedItems[0] -isnot [string]) -and ($loadedItems[0] -isnot [System.Collections.IDictionary])) { @($loadedItems[0]).Count } else { $loadedItems.Count }
+        $loadedItemTotal += $loadedCount
+        Write-Host "      loaded $loadIdx/$instCountSeries -- $loadedCount item(s), $($loadedRoster.Count) roster entrie(s): $($inst.CampaignName)" -ForegroundColor DarkGray
         $deltaInstances.Add([pscustomobject]@{
                 OrderIndex   = $inst.OrderIndex
                 CampaignId   = $inst.CampaignId
@@ -421,11 +436,13 @@ foreach ($series in $seriesList) {
             })
     }
 
+    Write-Host "    [$($series.NormalizedStem)] resolving + classifying $loadedItemTotal item(s) across $instCountSeries instance(s)..." -ForegroundColor DarkGray
     $dr = $null
     try {
         $dr = Get-SPSeriesAttestationDelta -Instances @($deltaInstances.ToArray()) `
             -SeriesStem ([string]$series.SeriesStem) -NormalizedStem ([string]$series.NormalizedStem) `
-            -PeriodType ([string]$series.PeriodType) -CorrelationID $correlationID
+            -PeriodType ([string]$series.PeriodType) -CorrelationID $correlationID `
+            -ProgressCallback { param($msg) Write-Host "      $msg" -ForegroundColor DarkGray }
     } catch {
         Write-Host "    WARN: delta engine threw for series '$($series.NormalizedStem)': $($_.Exception.Message)" -ForegroundColor Yellow
         continue
@@ -445,6 +462,7 @@ foreach ($series in $seriesList) {
     # attach to the ordered Data map so ONLY the HTML render layer reads it. Get-V4eJsonSeriesProjection
     # builds JSON from explicit keys, so these new keys never leak into the JSON/console headline
     # (reconciliation kept).
+    Write-Host "    [$($series.NormalizedStem)] computing per-instance completion..." -ForegroundColor DarkGray
     $instanceCompletionList = New-Object System.Collections.Generic.List[object]
     foreach ($di in @($deltaInstances.ToArray())) {
         $icRes = $null
@@ -499,7 +517,8 @@ foreach ($series in $seriesList) {
     $seriesResults.Add($dr.Data)
     $na = [int]$dr.Data.Counts['NewlyAttested']
     $pu = [int]$dr.Data.Counts['PersistentlyUndecided']
-    Write-Host "    [$($series.NormalizedStem)] instances=$($dr.Data.InstanceCount) newlyAttested=$na persistentlyUndecided=$pu" -ForegroundColor DarkGray
+    $seriesSw.Stop()
+    Write-Host "    [$($series.NormalizedStem)] instances=$($dr.Data.InstanceCount) newlyAttested=$na persistentlyUndecided=$pu ($([math]::Round($seriesSw.Elapsed.TotalSeconds,1))s)" -ForegroundColor DarkGray
 }
 
 $seriesDataList = @($seriesResults.ToArray())

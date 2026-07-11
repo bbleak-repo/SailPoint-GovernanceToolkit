@@ -69,6 +69,7 @@
         'Get-SPReviewerCompletion'
         'Get-SPForceSignedReviewerCount'
         'Get-SPDistinctReviewerSignOff'
+        'Get-SPGenuineReviewerSignOff'
         'Resolve-SPRosterSignOffProvenance'
         'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
