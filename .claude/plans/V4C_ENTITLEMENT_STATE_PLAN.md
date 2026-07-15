@@ -224,8 +224,20 @@ Default: `{toolkit-root}/Audit/metrics/entitlement-state.jsonl`
 `Scripts/Invoke-SPDailyEvidenceReportV4c.ps1` -- fork of V4, NOT V4b.
 V4 stays as-is (production stable). V4c adds the entitlement state layer.
 
+### Module (extracted for reuse)
+`Modules/SP.Audit/SP.EntitlementState.psm1` -- 3 public functions:
+- `Read-SPEntitlementState` -- load JSONL into hashtable
+- `Update-SPEntitlementState` -- process campaigns through state machine
+- `Write-SPEntitlementState` -- atomic write (.tmp + rename)
+
+Registered as a nested module in SP.Audit.psd1. Any script (V1-V7) can call these
+functions -- the state file is script-agnostic.
+
+Future reviewer state tracker follows the same pattern in a separate module.
+
 ### Dependencies
 - Same modules as V4 (SP.Shared, SP.Core, SP.Api, SP.Audit)
+- `SP.EntitlementState` (new nested module in SP.Audit)
 - `Group-SPAuditDecisions` with `idNowAutoApproved` detection (already in SP.AuditReportCore)
 - `Audit/metrics/entitlement-state.jsonl` (created on first run)
 
@@ -262,12 +274,15 @@ V4c's HTML adds/modifies:
 
 ## Done-When
 
-- [ ] V4c reads/writes entitlement-state.jsonl
-- [ ] UNDECIDED state correctly derived from idNowAutoApproved (NOT from ISC API)
-- [ ] stateLog only appends on genuine state changes
-- [ ] Multi-campaign processing in chronological order
-- [ ] First run creates clean state file
-- [ ] Subsequent runs update correctly (no duplicates, no lost history)
-- [ ] "Newly Decided" section sourced from state file
-- [ ] Pester tests for all scenarios
-- [ ] PS 5.1 Desktop compatible
+- [x] V4c reads/writes entitlement-state.jsonl
+- [x] UNDECIDED state correctly derived from idNowAutoApproved (NOT from ISC API)
+- [x] stateLog only appends on genuine state changes
+- [x] Multi-campaign processing in chronological order
+- [x] First run creates clean state file
+- [x] Subsequent runs update correctly (no duplicates, no lost history)
+- [x] "Newly Decided" section sourced from state file
+- [x] State logic extracted to SP.EntitlementState.psm1 module (reusable by V1-V7)
+- [x] Pester tests for all scenarios (ES-001 through ES-009, 12 tests passing)
+- [x] Read/Write round-trip test (ES-008) with actual JSONL file I/O
+- [x] StateSummary counts test (ES-009)
+- [ ] PS 5.1 Desktop compatible (syntax validated via pwsh parser, needs Windows PS 5.1 runtime test)

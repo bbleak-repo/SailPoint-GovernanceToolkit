@@ -287,13 +287,17 @@ other days, flag as "pattern detected: [day]".
 
 ## Done-When
 
-- [ ] SP.ReviewerState.psm1 module with Read/Update/Write/Query functions
-- [ ] reviewer-state.jsonl with per-series tracking
-- [ ] dayLog with C/P/M/U/X classification
-- [ ] weeklyStats computed per ISO week
-- [ ] Streak tracking (current/longest for completions and misses)
-- [ ] Campaign series auto-detection from name prefix
+- [x] SP.ReviewerState.psm1 module with Read/Update/Write + Get-SPCampaignSeriesName
+- [x] reviewer-state.jsonl with per-series tracking
+- [x] dayLog with C/P/M/U classification + idempotency guard
+- [x] weeklyStats computed per ISO week
+- [x] Streak tracking (current/longest for completions and misses)
+- [x] Campaign series auto-detection from name prefix (regex date stripping)
+- [x] Undecided (U) detection via idNowAutoApproved cross-reference
+- [x] engagementScore as simple completed/observed ratio (recency weighting deferred)
+- [x] Registered as nested module in SP.Audit.psd1 + Import-TestModules.ps1
+- [x] Pester tests: RS-001 through RS-011 (22 tests passing)
+- [ ] V4c integration: add Step 1d to call Read/Update/Write-SPReviewerState
 - [ ] V7 integration: enhanced compliance accountability from state file
-- [ ] Pattern detection: day-of-week miss analysis
-- [ ] Pester tests for all scenarios
-- [ ] PS 5.1 Desktop compatible
+- [ ] Pattern detection: day-of-week miss analysis (Get-SPReviewerEngagement)
+- [ ] PS 5.1 Desktop compatible (syntax validated via pwsh parser)

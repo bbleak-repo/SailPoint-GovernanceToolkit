@@ -37,7 +37,9 @@
         'SP.CampaignVelocity.psm1'
         'SP.CertTracker.psm1'
         'SP.ReviewerAccountability.psm1'
-        'SP.CampaignSeries.psm1'
+        'SP.EntitlementState.psm1'
+        'SP.ReviewerState.psm1'
+        'SP.StateOrchestrator.psm1'
     )
 
     # Public functions exported by this module
@@ -47,9 +49,6 @@
         'Get-SPAuditCertifications'
         'Get-SPAuditCertificationItems'
         'Get-SPCachedCampaignItems'
-        'Get-SPCachedCampaignRoster'
-        'Get-SPCachedCampaignSeries'
-        'Get-SPAuditEffectiveCacheTtl'
         'Clear-SPAuditItemCache'
         'Clear-SPAuditAccountCache'
         'Get-SPAuditCampaignReport'
@@ -62,20 +61,9 @@
 
         # SP.AuditReportCore - Categorization and metrics
         'Group-SPAuditDecisions'
-        'ConvertTo-SPCanonicalDecision'
-        'Test-SPAutoApproveMarker'
-        'Get-SPClosedIncompleteQualifier'
-        'Resolve-SPDecisionDateDisplay'
-        'Get-SPReviewerCompletion'
-        'Get-SPForceSignedReviewerCount'
-        'Get-SPDistinctReviewerSignOff'
-        'Resolve-SPRosterSignOffProvenance'
-        'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
         'Get-SPRevocationDisposition'
         'Group-SPReviewerActions'
-        'Group-SPCompletedPendingByReviewer'
-        'Resolve-SPCaptureDateKey'
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
@@ -239,7 +227,6 @@
         'Export-SPRemediationTickets'
 
         # SP.CampaignDelta - Dated campaign snapshots (diff/trend foundation)
-        'Get-SPStableScopeKey'
         'Build-SPCampaignSnapshotData'
         'Save-SPCampaignSnapshot'
         'Get-SPCampaignSnapshot'
@@ -265,7 +252,6 @@
         # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
         'Save-SPCampaignTrendPoint'
         'Get-SPCampaignTrend'
-        'Get-SPCampaignReviewerTrend'
         'Export-SPCampaignTrendHtml'
         'Get-SPProgramTrend'
         'Export-SPProgramTrendHtml'
@@ -291,13 +277,20 @@
         'Export-SPCertTrackerHtml'
         'Export-SPAttestationEvidenceHtml'
 
-        # SP.CampaignSeries - recurring series derivation (V4c)
-        'Get-SPCampaignSeriesKey'
-        'Group-SPCampaignSeries'
-        'Get-SPSeriesItemKey'
-        'Resolve-SPSeriesItemState'
-        'Get-SPSeriesAttestationDelta'
-        'Get-SPSeriesInstanceCompletion'
+        # SP.EntitlementState - Persistent per-entitlement state tracking
+        'Read-SPEntitlementState'
+        'Update-SPEntitlementState'
+        'Write-SPEntitlementState'
+
+        # SP.ReviewerState - Persistent per-reviewer engagement tracking
+        'Read-SPReviewerState'
+        'Update-SPReviewerState'
+        'Write-SPReviewerState'
+        'Get-SPCampaignSeriesName'
+
+        # SP.StateOrchestrator - Single-call state tracking for any script
+        'Invoke-SPStateTracking'
+        'Read-SPStateFiles'
     )
 
     # Do not export variables or aliases from nested modules
