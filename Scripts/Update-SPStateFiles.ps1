@@ -148,6 +148,16 @@ try {
 
     $duration = ((Get-Date) - $startTime).TotalSeconds
 
+    # A failed run must FAIL: previously the empty result rendered as a healthy
+    # "0 records" success and schedulers never noticed a broken cache path,
+    # corrupt state file, or failed write.
+    if (-not $tracking.Success) {
+        Write-Host ''
+        Write-Host "  ERROR: State update failed: $($tracking.Error)" -ForegroundColor Red
+        Write-Host ''
+        exit 5
+    }
+
     Write-Host ''
     Write-Host '  State Update Complete' -ForegroundColor Green
     Write-Host "    Entitlement: $($tracking.Entitlement.Total) records ($($tracking.Entitlement.StateNew) new, $($tracking.Entitlement.StateChanged) changed, $($tracking.Entitlement.NewlyDecided.Count) decided)" -ForegroundColor White

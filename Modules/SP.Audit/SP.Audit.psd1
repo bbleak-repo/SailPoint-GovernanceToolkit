@@ -306,6 +306,7 @@
         # SP.EntitlementState - Persistent per-entitlement state tracking
         'Read-SPEntitlementState'
         'Update-SPEntitlementState'
+        'Invoke-SPEntitlementScopeSweep'
         'Write-SPEntitlementState'
 
         # SP.ReviewerState - Persistent per-reviewer engagement tracking
@@ -313,6 +314,7 @@
         'Update-SPReviewerState'
         'Write-SPReviewerState'
         'Get-SPCampaignSeriesName'
+        'Get-SPReviewerStateKey'
 
         # SP.StateOrchestrator - Single-call state tracking + shared report utilities
         'Invoke-SPStateTracking'

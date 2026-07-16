@@ -7,25 +7,31 @@
     across campaign instances.
 
 .DESCRIPTION
-    Validates the state machine, JSONL round-trip, ProcessedInstances tracking,
-    stateLog format, consecutiveUndecided counters, scope detection, and the
+    Validates the state machine, JSONL round-trip, stateLog format (yyyyMMdd day keys),
+    derived consecutiveUndecided, the scope sweep (orchestrator-owned), corrupt-file
+    accounting, re-processing convergence (ACTIVE instances), and the
     UNDECIDED->PENDING regression guard.
 
     ES-001: Read empty/missing file returns empty StateMap, Exists=false
-    ES-002: Create records from resolved items (decision mapping)
+    ES-002: Create records from resolved items (decision mapping, instance-dated)
     ES-003: PENDING->APPROVE transition detected as NewlyDecided
     ES-004: UNDECIDED->APPROVE transition detected as NewlyDecided
     ES-005: UNDECIDED->PENDING regression guard (skip, keep UNDECIDED)
-    ES-006: Same state = no stateLog append, only metadata update
-    ES-007: Dropped from scope (item not in resolved items -> inCurrentScope=false)
-    ES-008: Already-dropped items not re-reported
+    ES-006: Same state = no stateLog duplication, only metadata update
+    ES-007: Scope sweep drops items absent from their series' newest instance
+    ES-008: Scope sweep is idempotent -- reruns drop nothing new
     ES-009: StateSummary counts correct
-    ES-010: stateLog format (P:0624|A:0625)
+    ES-010: stateLog format (P:20260624|A:20260625) incl. year-boundary ordering
     ES-011: Write/Read JSONL round-trip with _meta line
-    ES-012: ProcessedInstances tracking (InstanceId added to set)
+    ES-012: Update does NOT mark ProcessedInstances (orchestrator owns it)
     ES-013: ProcessedInstances in _meta survives round-trip
-    ES-014: consecutiveUndecided counter increments/resets
+    ES-014: consecutiveUndecided derives from the trailing P/U run
     ES-015: Multiple instances processed chronologically
+    ES-016: Re-processing the same instance converges (ACTIVE campaign day upgrade)
+    ES-017: Out-of-order backfill never regresses current state
+    ES-018: Corrupt lines are counted in SkippedLines, valid lines still load
+    ES-019: Retention prune removes only long-out-of-scope records
+    ES-020: First-seen-already-decided is NOT NewlyDecided (no observed transition)
 #>
 
 BeforeAll {
@@ -81,6 +87,7 @@ Describe 'ES-001: Read empty/missing file returns empty StateMap' {
         $result.RecordCount    | Should -Be 0
         $result.ProcessedInstances | Should -BeOfType [hashtable]
         $result.ProcessedInstances.Count | Should -Be 0
+        $result.SkippedLines | Should -Be 0
     }
 
     It 'returns Exists=true and empty StateMap for an empty file' {
@@ -107,9 +114,11 @@ Describe 'ES-002: Create records from resolved items' {
             -IsAutoApproved $false -IsGenuineDecision $false
 
         $items = @($approved, $revoked, $autoUndec, $pending)
+        # TodayLabel deliberately differs from InstanceDate: every record date must
+        # come from the campaign's own day, never the processing day.
         $script:result = Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems $items -InstanceId 'camp-002' -InstanceDate '2026-06-24' `
-            -TodayLabel '2026-06-24'
+            -SeriesName 'daily attestation' -TodayLabel '2026-07-15'
     }
 
     It 'maps Approved -> APPROVE' {
@@ -131,6 +140,16 @@ Describe 'ES-002: Create records from resolved items' {
     It 'reports StateNew = 4' {
         $script:result.StateNew | Should -Be 4
     }
+
+    It 'stamps record dates from the INSTANCE date, not the processing date' {
+        $script:stateMap['id-a|ent-a|src-a']['firstSeenDate'] | Should -Be '2026-06-24'
+        $script:stateMap['id-a|ent-a|src-a']['lastSeenDate']  | Should -Be '2026-06-24'
+        $script:stateMap['id-a|ent-a|src-a']['lastStateChangeDate'] | Should -Be '2026-06-24'
+    }
+
+    It 'stamps the series name on records (scope sweep depends on it)' {
+        $script:stateMap['id-a|ent-a|src-a']['seriesName'] | Should -Be 'daily attestation'
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -148,12 +167,12 @@ Describe 'ES-003: PENDING->APPROVE transition detected as NewlyDecided' {
         # Confirm PENDING state was set
         $script:priorState = $script:stateMap['id-pd|ent-pd|src-pd']['currentDecision']
 
-        # Now approve it
+        # Now approve it (processing happens later than the campaign day)
         $approved = New-TestResolvedItem -ItemKey 'id-pd|ent-pd|src-pd' `
             -HonestDecision 'Approved'
         $script:result = Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems @($approved) -InstanceId 'camp-003b' `
-            -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
+            -InstanceDate '2026-06-25' -TodayLabel '2026-07-15'
     }
 
     It 'prior state was PENDING' {
@@ -164,6 +183,10 @@ Describe 'ES-003: PENDING->APPROVE transition detected as NewlyDecided' {
         $script:result.NewlyDecided.Count | Should -Be 1
         $script:result.NewlyDecided[0].PriorState | Should -Be 'PENDING'
         $script:result.NewlyDecided[0].NewState   | Should -Be 'APPROVE'
+    }
+
+    It 'stamps DecisionDate with the campaign day, never the processing day' {
+        $script:result.NewlyDecided[0].DecisionDate | Should -Be '2026-06-25'
     }
 
     It 'updates currentDecision to APPROVE' {
@@ -239,6 +262,7 @@ Describe 'ES-005: UNDECIDED->PENDING regression guard' {
 
     It 'still updates metadata (lastSeenDate, inCurrentScope)' {
         $script:stateMap['id-rg|ent-rg|src-rg']['inCurrentScope'] | Should -BeTrue
+        $script:stateMap['id-rg|ent-rg|src-rg']['lastSeenDate'] | Should -Be '2026-06-25'
     }
 
     It 'reports zero state changes' {
@@ -251,9 +275,9 @@ Describe 'ES-005: UNDECIDED->PENDING regression guard' {
 }
 
 # ---------------------------------------------------------------------------
-# ES-006: Same state = no stateLog append, only metadata update
+# ES-006: Same state = no stateLog duplication, only metadata update
 # ---------------------------------------------------------------------------
-Describe 'ES-006: Same state does not append to stateLog' {
+Describe 'ES-006: Same state does not duplicate the stateLog entry' {
     BeforeAll {
         $script:stateMap = @{}
         $item = New-TestResolvedItem -ItemKey 'id-ss|ent-ss|src-ss' -HonestDecision 'Approved'
@@ -285,9 +309,10 @@ Describe 'ES-006: Same state does not append to stateLog' {
 }
 
 # ---------------------------------------------------------------------------
-# ES-007: Dropped from scope
+# ES-007: Scope sweep (orchestrator-owned) drops items absent from their
+# series' newest instance
 # ---------------------------------------------------------------------------
-Describe 'ES-007: Items not in resolved items are marked dropped from scope' {
+Describe 'ES-007: Scope sweep drops items absent from their series newest instance' {
     BeforeAll {
         $script:stateMap = @{}
         $itemA = New-TestResolvedItem -ItemKey 'id-keep|ent-keep|src-keep' -HonestDecision 'Approved'
@@ -295,12 +320,15 @@ Describe 'ES-007: Items not in resolved items are marked dropped from scope' {
             -IdentityName 'Drop User' -AccessName 'Drop Access' -SourceName 'Drop Source'
         Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems @($itemA, $itemB) -InstanceId 'camp-007a' `
-            -InstanceDate '2026-06-24' -TodayLabel '2026-06-24'
+            -InstanceDate '2026-06-24' -SeriesName 'daily' -TodayLabel '2026-06-24'
 
-        # Second pass: only itemA is present
-        $script:result = Update-SPEntitlementState -StateMap $script:stateMap `
+        # Newest instance (06-25) only contains itemA
+        Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems @($itemA) -InstanceId 'camp-007b' `
-            -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
+            -InstanceDate '2026-06-25' -SeriesName 'daily' -TodayLabel '2026-06-25'
+
+        $script:sweep = Invoke-SPEntitlementScopeSweep -StateMap $script:stateMap `
+            -SeriesNewestDates @{ 'daily' = '2026-06-25' } -TodayLabel '2026-06-25'
     }
 
     It 'marks the missing item as inCurrentScope=false' {
@@ -308,19 +336,30 @@ Describe 'ES-007: Items not in resolved items are marked dropped from scope' {
     }
 
     It 'reports the dropped item in DroppedFromScope' {
-        $script:result.DroppedFromScope.Count | Should -Be 1
-        $script:result.DroppedFromScope[0].ItemKey | Should -Be 'id-drop|ent-drop|src-drop'
+        $script:sweep.DroppedFromScope.Count | Should -Be 1
+        $script:sweep.DroppedFromScope[0].ItemKey | Should -Be 'id-drop|ent-drop|src-drop'
     }
 
     It 'keeps the still-present item as inCurrentScope=true' {
         $script:stateMap['id-keep|ent-keep|src-keep']['inCurrentScope'] | Should -BeTrue
     }
+
+    It 'leaves records of series with no known newest date untouched' {
+        $foreign = @{ itemKey = 'x'; seriesName = 'quarterly'; lastSeenDate = '2026-01-01'
+                      inCurrentScope = $true; identityName = ''; accessName = ''; sourceName = ''
+                      currentDecision = 'PENDING' }
+        $map2 = @{ 'x' = $foreign }
+        $s2 = Invoke-SPEntitlementScopeSweep -StateMap $map2 `
+            -SeriesNewestDates @{ 'daily' = '2026-06-25' } -TodayLabel '2026-06-25'
+        $map2['x']['inCurrentScope'] | Should -BeTrue
+        $s2.DroppedFromScope.Count | Should -Be 0
+    }
 }
 
 # ---------------------------------------------------------------------------
-# ES-008: Already-dropped items not re-reported
+# ES-008: Scope sweep is idempotent -- a same-day rerun drops nothing new
 # ---------------------------------------------------------------------------
-Describe 'ES-008: Already-dropped items are not re-reported' {
+Describe 'ES-008: Scope sweep is idempotent across reruns' {
     BeforeAll {
         $script:stateMap = @{}
         $itemA = New-TestResolvedItem -ItemKey 'id-keep2|ent-keep2|src-keep2' -HonestDecision 'Approved'
@@ -328,21 +367,29 @@ Describe 'ES-008: Already-dropped items are not re-reported' {
             -IdentityName 'Drop User 2' -AccessName 'Drop Access 2'
         Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems @($itemA, $itemB) -InstanceId 'camp-008a' `
-            -InstanceDate '2026-06-24' -TodayLabel '2026-06-24'
-
-        # First drop
+            -InstanceDate '2026-06-24' -SeriesName 'daily' -TodayLabel '2026-06-24'
         Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems @($itemA) -InstanceId 'camp-008b' `
-            -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
+            -InstanceDate '2026-06-25' -SeriesName 'daily' -TodayLabel '2026-06-25'
 
-        # Second pass with same item still absent
-        $script:result = Update-SPEntitlementState -StateMap $script:stateMap `
-            -ResolvedItems @($itemA) -InstanceId 'camp-008c' `
-            -InstanceDate '2026-06-26' -TodayLabel '2026-06-26'
+        $newest = @{ 'daily' = '2026-06-25' }
+        $script:sweep1 = Invoke-SPEntitlementScopeSweep -StateMap $script:stateMap `
+            -SeriesNewestDates $newest -TodayLabel '2026-06-25'
+        # Same-day rerun: NOTHING new processed -- the sweep must not drop or flip anything.
+        $script:sweep2 = Invoke-SPEntitlementScopeSweep -StateMap $script:stateMap `
+            -SeriesNewestDates $newest -TodayLabel '2026-06-25'
     }
 
-    It 'does not re-report the already-dropped item' {
-        $script:result.DroppedFromScope.Count | Should -Be 0
+    It 'first sweep reports the drop' {
+        $script:sweep1.DroppedFromScope.Count | Should -Be 1
+    }
+
+    It 'rerun does not re-report the already-dropped item' {
+        $script:sweep2.DroppedFromScope.Count | Should -Be 0
+    }
+
+    It 'rerun keeps the in-scope item in scope (no mass drop on rerun)' {
+        $script:stateMap['id-keep2|ent-keep2|src-keep2']['inCurrentScope'] | Should -BeTrue
     }
 
     It 'item remains inCurrentScope=false' {
@@ -388,9 +435,9 @@ Describe 'ES-009: StateSummary counts in-scope items by state' {
 }
 
 # ---------------------------------------------------------------------------
-# ES-010: stateLog format
+# ES-010: stateLog format (year-full day keys)
 # ---------------------------------------------------------------------------
-Describe 'ES-010: stateLog format uses abbreviation:MMDD pipe-separated' {
+Describe 'ES-010: stateLog format uses abbreviation:yyyyMMdd pipe-separated' {
     BeforeAll {
         $script:stateMap = @{}
         $pending = New-TestResolvedItem -ItemKey 'id-log|ent-log|src-log' `
@@ -406,16 +453,31 @@ Describe 'ES-010: stateLog format uses abbreviation:MMDD pipe-separated' {
             -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
     }
 
-    It 'stateLog shows P:0624|A:0625' {
-        $script:stateMap['id-log|ent-log|src-log']['stateLog'] | Should -Be 'P:0624|A:0625'
+    It 'stateLog shows P:20260624|A:20260625' {
+        $script:stateMap['id-log|ent-log|src-log']['stateLog'] | Should -Be 'P:20260624|A:20260625'
     }
 
-    It 'entries are chronologically ordered by MMDD' {
+    It 'entries are chronologically ordered by day key' {
         $log = $script:stateMap['id-log|ent-log|src-log']['stateLog']
         $parts = $log.Split('|')
         $dates = @($parts | ForEach-Object { $_.Substring(2) })
         $sorted = @($dates | Sort-Object)
         ($dates -join ',') | Should -Be ($sorted -join ',')
+    }
+
+    It 'keeps December-to-January transitions in true chronological order' {
+        # The old MMdd format sorted 0105 BEFORE 1231 of the PRIOR year, rendering
+        # the approval before the pending state in the audit trail.
+        $r1 = Update-StateLogEntry -StateLog '' -DayKey '20251231' -StateCode 'PENDING'
+        $r2 = Update-StateLogEntry -StateLog $r1.StateLog -DayKey '20260105' -StateCode 'APPROVE'
+        $r2.StateLog | Should -Be 'P:20251231|A:20260105'
+    }
+
+    It 'does not collide the same calendar day across two years' {
+        $r1 = Update-StateLogEntry -StateLog '' -DayKey '20250707' -StateCode 'PENDING'
+        $r2 = Update-StateLogEntry -StateLog $r1.StateLog -DayKey '20260707' -StateCode 'APPROVE'
+        $r2.StateLog | Should -Be 'P:20250707|A:20260707'
+        $r2.Changed  | Should -BeTrue
     }
 }
 
@@ -437,14 +499,22 @@ Describe 'ES-011: Write/Read JSONL round-trip' {
 
         $script:filePath = Join-Path $TestDrive 'entitlement-state.jsonl'
         $script:procInst = @{ 'camp-011' = @{ processedDate = '2026-06-24'; instanceDate = '2026-06-24' } }
-        Write-SPEntitlementState -StateMap $script:stateMap -Path $script:filePath `
+        $script:writeResult = Write-SPEntitlementState -StateMap $script:stateMap -Path $script:filePath `
             -ProcessedInstances $script:procInst -LastRunDate '2026-06-24'
 
         $script:readBack = Read-SPEntitlementState -Path $script:filePath
     }
 
+    It 'write reports Success' {
+        $script:writeResult.Success | Should -BeTrue
+    }
+
     It 'file exists after write' {
         Test-Path $script:filePath | Should -BeTrue
+    }
+
+    It 'no temp file is left behind' {
+        @(Get-ChildItem $TestDrive -Filter 'entitlement-state.jsonl.*.tmp').Count | Should -Be 0
     }
 
     It 'round-trip preserves record count' {
@@ -465,34 +535,30 @@ Describe 'ES-011: Write/Read JSONL round-trip' {
         $script:readBack.LastRunDate | Should -Be '2026-06-24'
     }
 
-    It 'round-trip preserves Exists=true' {
-        $script:readBack.Exists | Should -BeTrue
+    It 'overwrite of an existing file also succeeds (File.Replace path)' {
+        $second = Write-SPEntitlementState -StateMap $script:stateMap -Path $script:filePath `
+            -ProcessedInstances $script:procInst -LastRunDate '2026-06-25'
+        $second.Success | Should -BeTrue
+        (Read-SPEntitlementState -Path $script:filePath).LastRunDate | Should -Be '2026-06-25'
     }
 }
 
 # ---------------------------------------------------------------------------
-# ES-012: ProcessedInstances tracking
+# ES-012: Update does NOT mark ProcessedInstances (orchestrator owns it)
 # ---------------------------------------------------------------------------
-Describe 'ES-012: ProcessedInstances tracking' {
-    BeforeAll {
-        $script:stateMap = @{}
+Describe 'ES-012: Update-SPEntitlementState does not mark ProcessedInstances' {
+    It 'leaves the caller-supplied ProcessedInstances untouched' {
+        # v1.1 contract: the earlier in-function marking is what skipped
+        # Update-SPReviewerState for every instance (reviewer state never populated)
+        # and froze ACTIVE campaigns at their first snapshot.
+        $stateMap = @{}
+        $procInst = @{}
         $item = New-TestResolvedItem -ItemKey 'id-pi|ent-pi|src-pi' -HonestDecision 'Approved'
-        $script:procInst = @{}
-        $script:result = Update-SPEntitlementState -StateMap $script:stateMap `
-            -ResolvedItems @($item) -ProcessedInstances $script:procInst `
-            -InstanceId 'camp-012' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24'
-    }
+        [void](Update-SPEntitlementState -StateMap $stateMap `
+            -ResolvedItems @($item) -ProcessedInstances $procInst `
+            -InstanceId 'camp-012' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24')
 
-    It 'adds InstanceId to ProcessedInstances' {
-        $script:result.ProcessedInstances.ContainsKey('camp-012') | Should -BeTrue
-    }
-
-    It 'records instanceDate in ProcessedInstances entry' {
-        $script:result.ProcessedInstances['camp-012'].instanceDate | Should -Be '2026-06-24'
-    }
-
-    It 'records processedDate in ProcessedInstances entry' {
-        $script:result.ProcessedInstances['camp-012'].processedDate | Should -Be '2026-06-24'
+        $procInst.ContainsKey('camp-012') | Should -BeFalse
     }
 }
 
@@ -530,7 +596,7 @@ Describe 'ES-013: ProcessedInstances in _meta survives Write/Read round-trip' {
 }
 
 # ---------------------------------------------------------------------------
-# ES-014: consecutiveUndecided counter increments/resets
+# ES-014: consecutiveUndecided derives from the trailing P/U run
 # ---------------------------------------------------------------------------
 Describe 'ES-014: consecutiveUndecided counter' {
     BeforeAll {
@@ -544,7 +610,7 @@ Describe 'ES-014: consecutiveUndecided counter' {
 
         $script:countAfterFirst = $script:stateMap['id-cu|ent-cu|src-cu']['consecutiveUndecided']
 
-        # Second: still UNDECIDED (same state) -- counter increments to 2
+        # Second: still UNDECIDED on the next campaign day -- counter reaches 2
         Update-SPEntitlementState -StateMap $script:stateMap `
             -ResolvedItems @($undecided) -InstanceId 'camp-014b' `
             -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
@@ -564,12 +630,31 @@ Describe 'ES-014: consecutiveUndecided counter' {
         $script:countAfterFirst | Should -Be 1
     }
 
-    It 'increments to 2 when UNDECIDED repeats' {
+    It 'increments to 2 when UNDECIDED repeats on a new campaign day' {
         $script:countAfterSecond | Should -Be 2
     }
 
     It 'resets to 0 when decision changes to APPROVE' {
         $script:countAfterReset | Should -Be 0
+    }
+
+    It 'does NOT double-count when the SAME instance day is re-processed' {
+        # ACTIVE campaigns are re-captured every run until they complete; the counter
+        # is derived from the day-keyed log, so a replay converges.
+        $map = @{}
+        $u = New-TestResolvedItem -ItemKey 'k|e|s' -HonestDecision 'Undecided' `
+            -IsAutoApproved $true -IsGenuineDecision $false
+        1..3 | ForEach-Object {
+            Update-SPEntitlementState -StateMap $map -ResolvedItems @($u) `
+                -InstanceId 'camp-x' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24' | Out-Null
+        }
+        $map['k|e|s']['consecutiveUndecided'] | Should -Be 1
+    }
+
+    It 'Get-SPTrailingUnreviewedCount counts the trailing P/U run only' {
+        Get-SPTrailingUnreviewedCount -StateLog 'A:20260601|P:20260602|U:20260603' | Should -Be 2
+        Get-SPTrailingUnreviewedCount -StateLog 'P:20260601|A:20260602' | Should -Be 0
+        Get-SPTrailingUnreviewedCount -StateLog '' | Should -Be 0
     }
 }
 
@@ -579,7 +664,6 @@ Describe 'ES-014: consecutiveUndecided counter' {
 Describe 'ES-015: Multiple instances processed chronologically' {
     BeforeAll {
         $script:stateMap = @{}
-        $script:procInst = @{}
 
         # Instance 1: items A and B as PENDING
         $items1 = @(
@@ -591,7 +675,7 @@ Describe 'ES-015: Multiple instances processed chronologically' {
                 -IdentityName 'Bravo')
         )
         Update-SPEntitlementState -StateMap $script:stateMap `
-            -ResolvedItems $items1 -ProcessedInstances $script:procInst `
+            -ResolvedItems $items1 `
             -InstanceId 'camp-015a' -InstanceDate '2026-06-23' -TodayLabel '2026-06-23'
 
         # Instance 2: A is approved, B still pending
@@ -603,7 +687,7 @@ Describe 'ES-015: Multiple instances processed chronologically' {
                 -IdentityName 'Bravo')
         )
         $script:result2 = Update-SPEntitlementState -StateMap $script:stateMap `
-            -ResolvedItems $items2 -ProcessedInstances $script:procInst `
+            -ResolvedItems $items2 `
             -InstanceId 'camp-015b' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24'
 
         # Instance 3: B is approved too
@@ -614,7 +698,7 @@ Describe 'ES-015: Multiple instances processed chronologically' {
                 -HonestDecision 'Approved' -IdentityName 'Bravo')
         )
         $script:result3 = Update-SPEntitlementState -StateMap $script:stateMap `
-            -ResolvedItems $items3 -ProcessedInstances $script:procInst `
+            -ResolvedItems $items3 `
             -InstanceId 'camp-015c' -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
     }
 
@@ -628,24 +712,114 @@ Describe 'ES-015: Multiple instances processed chronologically' {
         $script:result3.NewlyDecided[0].ItemKey | Should -Be 'id-mi-b|ent-mi-b|src-mi'
     }
 
-    It 'all three instances tracked in ProcessedInstances' {
-        $script:procInst.ContainsKey('camp-015a') | Should -BeTrue
-        $script:procInst.ContainsKey('camp-015b') | Should -BeTrue
-        $script:procInst.ContainsKey('camp-015c') | Should -BeTrue
-    }
-
     It 'stateLog shows chronological progression for item A' {
         $log = $script:stateMap['id-mi-a|ent-mi-a|src-mi']['stateLog']
-        $log | Should -Be 'P:0623|A:0624'
+        $log | Should -Be 'P:20260623|A:20260624|A:20260625'
     }
 
     It 'stateLog shows chronological progression for item B' {
         $log = $script:stateMap['id-mi-b|ent-mi-b|src-mi']['stateLog']
-        $log | Should -Be 'P:0623|A:0625'
+        $log | Should -Be 'P:20260623|P:20260624|A:20260625'
     }
 
     It 'final StateSummary shows 2 APPROVE, 0 PENDING' {
         $script:result3.StateSummary.APPROVE | Should -Be 2
         $script:result3.StateSummary.PENDING | Should -Be 0
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-016: Re-processing the same instance converges (ACTIVE campaign upgrade)
+# ---------------------------------------------------------------------------
+Describe 'ES-016: ACTIVE-instance re-processing converges' {
+    It 'a mid-day PENDING snapshot upgraded to APPROVE at close settles at APPROVE with one day entry' {
+        $map = @{}
+        $pending = New-TestResolvedItem -ItemKey 'act|e|s' `
+            -HonestDecision 'Undecided' -IsAutoApproved $false -IsGenuineDecision $false
+        # 09:00 capture of the ACTIVE campaign
+        Update-SPEntitlementState -StateMap $map -ResolvedItems @($pending) `
+            -InstanceId 'camp-act' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24' | Out-Null
+        # 18:00 re-capture after the reviewer finished
+        $approved = New-TestResolvedItem -ItemKey 'act|e|s' -HonestDecision 'Approved'
+        $r = Update-SPEntitlementState -StateMap $map -ResolvedItems @($approved) `
+            -InstanceId 'camp-act' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24'
+
+        $map['act|e|s']['currentDecision'] | Should -Be 'APPROVE'
+        $map['act|e|s']['stateLog'] | Should -Be 'A:20260624'   # day entry UPGRADED, not duplicated
+        $r.NewlyDecided.Count | Should -Be 1
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-017: Out-of-order backfill never regresses current state
+# ---------------------------------------------------------------------------
+Describe 'ES-017: Out-of-order backfill never regresses current state' {
+    It 'an older instance processed after a newer one only adds its history entry' {
+        $map = @{}
+        $approved = New-TestResolvedItem -ItemKey 'oo|e|s' -HonestDecision 'Approved'
+        Update-SPEntitlementState -StateMap $map -ResolvedItems @($approved) `
+            -InstanceId 'camp-new' -InstanceDate '2026-06-25' -TodayLabel '2026-06-25' | Out-Null
+
+        $pendingOld = New-TestResolvedItem -ItemKey 'oo|e|s' `
+            -HonestDecision 'Undecided' -IsAutoApproved $false -IsGenuineDecision $false
+        Update-SPEntitlementState -StateMap $map -ResolvedItems @($pendingOld) `
+            -InstanceId 'camp-old' -InstanceDate '2026-06-23' -TodayLabel '2026-06-25' | Out-Null
+
+        $map['oo|e|s']['currentDecision'] | Should -Be 'APPROVE'
+        $map['oo|e|s']['lastSeenDate']    | Should -Be '2026-06-25'
+        $map['oo|e|s']['stateLog']        | Should -Be 'P:20260623|A:20260625'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-018: Corrupt lines are counted, valid lines still load
+# ---------------------------------------------------------------------------
+Describe 'ES-018: Corrupt lines are counted in SkippedLines' {
+    It 'reports skipped lines and loads the valid records' {
+        $path = Join-Path $TestDrive 'corrupt-state.jsonl'
+        $valid = '{"itemKey":"ok|e|s","currentDecision":"APPROVE","inCurrentScope":true,"lastSeenDate":"2026-06-24"}'
+        @('{"_meta":true,"lastRunDate":"2026-06-24"}', $valid, '{ this is not json', '{"noItemKey":1}') |
+            Set-Content -Path $path -Encoding UTF8
+        $r = Read-SPEntitlementState -Path $path -WarningAction SilentlyContinue
+        $r.RecordCount  | Should -Be 1
+        $r.SkippedLines | Should -Be 2
+        $r.StateMap.ContainsKey('ok|e|s') | Should -BeTrue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-019: Retention prune removes only long-out-of-scope records
+# ---------------------------------------------------------------------------
+Describe 'ES-019: Retention prune removes only long-out-of-scope records' {
+    It 'prunes a record out of scope past RetentionDays, keeps fresher ones' {
+        $stale = @{ itemKey = 'stale'; seriesName = 'daily'; lastSeenDate = '2026-01-01'
+                    inCurrentScope = $false; identityName = ''; accessName = ''; sourceName = ''
+                    currentDecision = 'PENDING' }
+        $fresh = @{ itemKey = 'fresh'; seriesName = 'daily'; lastSeenDate = '2026-06-20'
+                    inCurrentScope = $false; identityName = ''; accessName = ''; sourceName = ''
+                    currentDecision = 'PENDING' }
+        $map = @{ 'stale' = $stale; 'fresh' = $fresh }
+        $s = Invoke-SPEntitlementScopeSweep -StateMap $map `
+            -SeriesNewestDates @{ 'daily' = '2026-06-25' } -TodayLabel '2026-06-25' -RetentionDays 90
+
+        $s.PrunedCount | Should -Be 1
+        $map.ContainsKey('stale') | Should -BeFalse
+        $map.ContainsKey('fresh') | Should -BeTrue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-020: First-seen-already-decided is NOT NewlyDecided
+# ---------------------------------------------------------------------------
+Describe 'ES-020: First sighting of an already-decided item is not a new decision' {
+    It 'reports zero NewlyDecided when the first-ever record is APPROVE' {
+        # Bootstrap over historical cache: the decision may be months old -- listing it
+        # as newly decided would fabricate decision-activity evidence.
+        $map = @{}
+        $approved = New-TestResolvedItem -ItemKey 'fs|e|s' -HonestDecision 'Approved'
+        $r = Update-SPEntitlementState -StateMap $map -ResolvedItems @($approved) `
+            -InstanceId 'camp-fs' -InstanceDate '2026-06-24' -TodayLabel '2026-07-15'
+        $r.NewlyDecided.Count | Should -Be 0
+        $r.StateNew | Should -Be 1
     }
 }

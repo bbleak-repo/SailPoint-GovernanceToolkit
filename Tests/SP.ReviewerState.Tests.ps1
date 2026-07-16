@@ -7,25 +7,31 @@
     across campaign series and instances.
 
 .DESCRIPTION
-    Validates engagement classification (C/P/M/U), dayLog format, weeklyStats,
-    streak tracking, engagement score, JSONL round-trip, ProcessedInstances tracking,
-    reviewer identity extraction, and multi-instance chronological processing.
+    Validates engagement classification (C/P/M/U), the yyyyMMdd dayLog, derived
+    weeklyStats/streaks/engagement, stable identity keying, JSONL round-trip,
+    re-processing convergence (ACTIVE instances), corrupt-file accounting, and
+    multi-instance chronological processing.
 
     RS-001: Campaign series name extraction (day-of-week+date, ISO date, year-only, no date)
     RS-002: Completed (C) -- all items IsGenuineDecision=true for a reviewer
     RS-003: Partial (P) -- some items decided, some not
     RS-004: Missed (M) -- zero genuine decisions, NOT all auto-approved
     RS-005: Undecided (U) -- zero genuine decisions, ALL auto-approved
-    RS-006: dayLog format and chronological ordering
-    RS-007: dayLog idempotency (same MMDD + same state = no update)
-    RS-008: weeklyStats per ISO week
+    RS-006: dayLog format (yyyyMMdd) and chronological ordering incl. year boundary
+    RS-007: Same-day same-state replay is idempotent
+    RS-008: weeklyStats per ISO week (derived from dayLog)
     RS-009: Streak tracking (C increments, M/U increments miss streak, P breaks both)
     RS-010: engagementScore = completed/observed * 100
     RS-011: Multiple series per reviewer tracked independently
     RS-012: Write/Read JSONL round-trip with _meta line
-    RS-013: ProcessedInstances tracking
+    RS-013: Update does NOT mark ProcessedInstances (orchestrator owns it)
     RS-014: Reviewer email/id extracted from resolved items
     RS-015: Multiple instances with different dates
+    RS-016: Stable identity -- rename keeps history; same-name distinct ids never merge
+    RS-017: ACTIVE re-processing converges (M day upgraded to C, no double-count)
+    RS-018: Out-of-order backfill yields date-ordered streaks
+    RS-019: Corrupt lines counted in SkippedLines, valid records still load
+    RS-020: ISO week labels are correct across the year boundary
 #>
 
 BeforeAll {
@@ -95,6 +101,11 @@ Describe 'RS-001: Get-SPCampaignSeriesName strips date suffixes' {
         $name = Get-SPCampaignSeriesName -CampaignName 'Quarterly Review 6/24/2026'
         $name | Should -Be 'Quarterly Review'
     }
+
+    It 'does NOT strip non-year trailing numbers (e.g. zone/site codes)' {
+        $name = Get-SPCampaignSeriesName -CampaignName 'PCI Review Zone 1042'
+        $name | Should -Be 'PCI Review Zone 1042'
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -114,16 +125,17 @@ Describe 'RS-002: Completed engagement (C) when all items genuinely decided' {
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
     }
 
-    It 'creates the reviewer record' {
-        $script:rvMap.ContainsKey('Alice Manager') | Should -BeTrue
+    It 'creates the reviewer record keyed by stable identity (nm: fallback)' {
+        $script:rvMap.ContainsKey('nm:Alice Manager') | Should -BeTrue
+        $script:rvMap['nm:Alice Manager']['reviewerName'] | Should -Be 'Alice Manager'
     }
 
-    It 'dayLog shows C for 0624' {
-        $script:rvMap['Alice Manager']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:0624'
+    It 'dayLog shows C for 2026-06-24' {
+        $script:rvMap['nm:Alice Manager']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:20260624'
     }
 
     It 'campaignsCompleted = 1' {
-        $script:rvMap['Alice Manager']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 1
+        $script:rvMap['nm:Alice Manager']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 1
     }
 
     It 'reports ReviewersNew = 1' {
@@ -148,16 +160,16 @@ Describe 'RS-003: Partial engagement (P) when some items decided' {
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
     }
 
-    It 'dayLog shows P for 0624' {
-        $script:rvMap['Bob Partial']['series']['Daily Attestation']['dayLog'] | Should -Be 'P:0624'
+    It 'dayLog shows P for 2026-06-24' {
+        $script:rvMap['nm:Bob Partial']['series']['Daily Attestation']['dayLog'] | Should -Be 'P:20260624'
     }
 
     It 'campaignsCompleted remains 0' {
-        $script:rvMap['Bob Partial']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 0
+        $script:rvMap['nm:Bob Partial']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 0
     }
 
     It 'campaignsMissed remains 0 (partial is not missed)' {
-        $script:rvMap['Bob Partial']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 0
+        $script:rvMap['nm:Bob Partial']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 0
     }
 }
 
@@ -178,16 +190,16 @@ Describe 'RS-004: Missed engagement (M) when zero decisions and not all auto-app
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
     }
 
-    It 'dayLog shows M for 0624' {
-        $script:rvMap['Carol Missed']['series']['Daily Attestation']['dayLog'] | Should -Be 'M:0624'
+    It 'dayLog shows M for 2026-06-24' {
+        $script:rvMap['nm:Carol Missed']['series']['Daily Attestation']['dayLog'] | Should -Be 'M:20260624'
     }
 
     It 'campaignsMissed = 1' {
-        $script:rvMap['Carol Missed']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 1
+        $script:rvMap['nm:Carol Missed']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 1
     }
 
     It 'campaignsCompleted = 0' {
-        $script:rvMap['Carol Missed']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 0
+        $script:rvMap['nm:Carol Missed']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 0
     }
 }
 
@@ -208,12 +220,12 @@ Describe 'RS-005: Undecided engagement (U) when zero decisions and all auto-appr
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
     }
 
-    It 'dayLog shows U for 0624' {
-        $script:rvMap['Dave Undecided']['series']['Daily Attestation']['dayLog'] | Should -Be 'U:0624'
+    It 'dayLog shows U for 2026-06-24' {
+        $script:rvMap['nm:Dave Undecided']['series']['Daily Attestation']['dayLog'] | Should -Be 'U:20260624'
     }
 
     It 'campaignsMissed = 1 (U counts as missed)' {
-        $script:rvMap['Dave Undecided']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 1
+        $script:rvMap['nm:Dave Undecided']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 1
     }
 }
 
@@ -252,22 +264,35 @@ Describe 'RS-006: dayLog format and chronological ordering' {
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-25'
     }
 
-    It 'dayLog shows C:0623|M:0624|C:0625 in chronological order' {
-        $script:rvMap['Eve DayLog']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:0623|M:0624|C:0625'
+    It 'dayLog shows C:20260623|M:20260624|C:20260625 in chronological order' {
+        $script:rvMap['nm:Eve DayLog']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:20260623|M:20260624|C:20260625'
     }
 
-    It 'each entry uses the format {State}:{MMDD}' {
-        $log = $script:rvMap['Eve DayLog']['series']['Daily Attestation']['dayLog']
+    It 'each entry uses the format {State}:{yyyyMMdd}' {
+        $log = $script:rvMap['nm:Eve DayLog']['series']['Daily Attestation']['dayLog']
         foreach ($part in $log.Split('|')) {
-            $part | Should -Match '^[CPMU]:\d{4}$'
+            $part | Should -Match '^[CPMU]:\d{8}$'
         }
+    }
+
+    It 'keeps December-to-January transitions chronological (the MMdd format did not)' {
+        $r1 = Update-DayLogEntry -DayLog '' -DayKey '20251231' -State 'C'
+        $r2 = Update-DayLogEntry -DayLog $r1.DayLog -DayKey '20260102' -State 'M'
+        $r2.DayLog | Should -Be 'C:20251231|M:20260102'
+    }
+
+    It 'does not collide the same calendar day across two years' {
+        $r1 = Update-DayLogEntry -DayLog '' -DayKey '20250707' -State 'C'
+        $r2 = Update-DayLogEntry -DayLog $r1.DayLog -DayKey '20260707' -State 'C'
+        $r2.DayLog  | Should -Be 'C:20250707|C:20260707'
+        $r2.Changed | Should -BeTrue
     }
 }
 
 # ---------------------------------------------------------------------------
-# RS-007: dayLog idempotency
+# RS-007: Same-day same-state replay is idempotent
 # ---------------------------------------------------------------------------
-Describe 'RS-007: dayLog idempotency -- same MMDD + same state = no update' {
+Describe 'RS-007: same day + same state replay changes nothing' {
     BeforeAll {
         $script:rvMap = @{}
 
@@ -280,22 +305,23 @@ Describe 'RS-007: dayLog idempotency -- same MMDD + same state = no update' {
             -ResolvedItems $items -InstanceId 'camp-007a' -InstanceDate '2026-06-24' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
 
-        $script:observedAfterFirst = [int]$script:rvMap['Frank Idem']['series']['Daily Attestation']['campaignsObserved']
+        $script:observedAfterFirst = [int]$script:rvMap['nm:Frank Idem']['series']['Daily Attestation']['campaignsObserved']
 
-        # Same day, same state
+        # Same day, same state (e.g. the ACTIVE campaign re-captured, or a rerun)
         $script:result = Update-SPReviewerState -ReviewerMap $script:rvMap `
             -ResolvedItems $items -InstanceId 'camp-007b' -InstanceDate '2026-06-24' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
 
-        $script:observedAfterSecond = [int]$script:rvMap['Frank Idem']['series']['Daily Attestation']['campaignsObserved']
+        $script:observedAfterSecond = [int]$script:rvMap['nm:Frank Idem']['series']['Daily Attestation']['campaignsObserved']
     }
 
     It 'dayLog does not duplicate the entry' {
-        $script:rvMap['Frank Idem']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:0624'
+        $script:rvMap['nm:Frank Idem']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:20260624'
     }
 
     It 'campaignsObserved does not increment on idempotent replay' {
         $script:observedAfterSecond | Should -Be $script:observedAfterFirst
+        $script:observedAfterSecond | Should -Be 1
     }
 }
 
@@ -324,27 +350,27 @@ Describe 'RS-008: weeklyStats tracked per ISO week' {
             -ResolvedItems $items2 -InstanceId 'camp-008b' -InstanceDate '2026-06-23' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-23'
 
-        $script:sd = $script:rvMap['Grace Weekly']['series']['Daily Attestation']
+        $script:sd = $script:rvMap['nm:Grace Weekly']['series']['Daily Attestation']
     }
 
-    It 'weeklyStats has an entry for the ISO week' {
-        $script:sd['weeklyStats'].Count | Should -BeGreaterOrEqual 1
+    It 'weeklyStats has exactly one ISO-week entry' {
+        $script:sd['weeklyStats'].Count | Should -Be 1
+    }
+
+    It 'the ISO week label is 2026-W26' {
+        @($script:sd['weeklyStats'].Keys)[0] | Should -Be '2026-W26'
     }
 
     It 'expected count matches the number of days processed in that week' {
-        # Both days are in the same ISO week
-        $weekKey = @($script:sd['weeklyStats'].Keys)[0]
-        [int]$script:sd['weeklyStats'][$weekKey]['expected'] | Should -Be 2
+        [int]$script:sd['weeklyStats']['2026-W26']['expected'] | Should -Be 2
     }
 
     It 'completed = 1 for the week (Monday only)' {
-        $weekKey = @($script:sd['weeklyStats'].Keys)[0]
-        [int]$script:sd['weeklyStats'][$weekKey]['completed'] | Should -Be 1
+        [int]$script:sd['weeklyStats']['2026-W26']['completed'] | Should -Be 1
     }
 
     It 'missed = 1 for the week (Tuesday only)' {
-        $weekKey = @($script:sd['weeklyStats'].Keys)[0]
-        [int]$script:sd['weeklyStats'][$weekKey]['missed'] | Should -Be 1
+        [int]$script:sd['weeklyStats']['2026-W26']['missed'] | Should -Be 1
     }
 }
 
@@ -370,7 +396,7 @@ Describe 'RS-009: Streak tracking (C increments, M/U increments miss, P breaks b
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-23'
 
         $script:streaksAfter2C = @{}
-        $s = $script:rvMap['Hank Streaker']['series']['Daily Attestation']['streaks']
+        $s = $script:rvMap['nm:Hank Streaker']['series']['Daily Attestation']['streaks']
         foreach ($k in $s.Keys) { $script:streaksAfter2C[$k] = $s[$k] }
 
         # Day 3: M (currentStreak=0, currentMissStreak=1)
@@ -383,7 +409,7 @@ Describe 'RS-009: Streak tracking (C increments, M/U increments miss, P breaks b
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
 
         $script:streaksAfterM = @{}
-        $s2 = $script:rvMap['Hank Streaker']['series']['Daily Attestation']['streaks']
+        $s2 = $script:rvMap['nm:Hank Streaker']['series']['Daily Attestation']['streaks']
         foreach ($k in $s2.Keys) { $script:streaksAfterM[$k] = $s2[$k] }
 
         # Day 4: U (currentMissStreak=2)
@@ -396,7 +422,7 @@ Describe 'RS-009: Streak tracking (C increments, M/U increments miss, P breaks b
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-25'
 
         $script:streaksAfterU = @{}
-        $s3 = $script:rvMap['Hank Streaker']['series']['Daily Attestation']['streaks']
+        $s3 = $script:rvMap['nm:Hank Streaker']['series']['Daily Attestation']['streaks']
         foreach ($k in $s3.Keys) { $script:streaksAfterU[$k] = $s3[$k] }
 
         # Day 5: P (breaks both streaks)
@@ -411,7 +437,7 @@ Describe 'RS-009: Streak tracking (C increments, M/U increments miss, P breaks b
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-26'
 
         $script:streaksAfterP = @{}
-        $s4 = $script:rvMap['Hank Streaker']['series']['Daily Attestation']['streaks']
+        $s4 = $script:rvMap['nm:Hank Streaker']['series']['Daily Attestation']['streaks']
         foreach ($k in $s4.Keys) { $script:streaksAfterP[$k] = $s4[$k] }
     }
 
@@ -472,15 +498,15 @@ Describe 'RS-010: engagementScore calculation' {
     }
 
     It 'totalCampaignsCompleted = 2' {
-        [int]$script:rvMap['Ivy Score']['global']['totalCampaignsCompleted'] | Should -Be 2
+        [int]$script:rvMap['nm:Ivy Score']['global']['totalCampaignsCompleted'] | Should -Be 2
     }
 
     It 'totalCampaignsObserved = 3' {
-        [int]$script:rvMap['Ivy Score']['global']['totalCampaignsObserved'] | Should -Be 3
+        [int]$script:rvMap['nm:Ivy Score']['global']['totalCampaignsObserved'] | Should -Be 3
     }
 
     It 'engagementScore = 67 (rounded from 66.67)' {
-        [int]$script:rvMap['Ivy Score']['global']['engagementScore'] | Should -Be 67
+        [int]$script:rvMap['nm:Ivy Score']['global']['engagementScore'] | Should -Be 67
     }
 }
 
@@ -511,23 +537,23 @@ Describe 'RS-011: Multiple series per reviewer tracked independently' {
     }
 
     It 'reviewer has two series entries' {
-        $script:rvMap['Jack Multi']['series'].Count | Should -Be 2
+        $script:rvMap['nm:Jack Multi']['series'].Count | Should -Be 2
     }
 
     It 'Daily Attestation series shows C' {
-        $script:rvMap['Jack Multi']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:0624'
+        $script:rvMap['nm:Jack Multi']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:20260624'
     }
 
     It 'SOX Review series shows M' {
-        $script:rvMap['Jack Multi']['series']['SOX Review']['dayLog'] | Should -Be 'M:0624'
+        $script:rvMap['nm:Jack Multi']['series']['SOX Review']['dayLog'] | Should -Be 'M:20260624'
     }
 
     It 'global totalCampaignsObserved = 2 (across both series)' {
-        [int]$script:rvMap['Jack Multi']['global']['totalCampaignsObserved'] | Should -Be 2
+        [int]$script:rvMap['nm:Jack Multi']['global']['totalCampaignsObserved'] | Should -Be 2
     }
 
     It 'global totalCampaignsCompleted = 1 (only Daily Attestation)' {
-        [int]$script:rvMap['Jack Multi']['global']['totalCampaignsCompleted'] | Should -Be 1
+        [int]$script:rvMap['nm:Jack Multi']['global']['totalCampaignsCompleted'] | Should -Be 1
     }
 }
 
@@ -548,11 +574,15 @@ Describe 'RS-012: Write/Read JSONL round-trip' {
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
 
         $script:filePath = Join-Path $TestDrive 'reviewer-state.jsonl'
-        $script:procInst = @{ 'camp-012' = @{ date = '2026-06-24'; series = 'Daily Attestation'; status = 'COMPLETED' } }
-        Write-SPReviewerState -ReviewerMap $script:rvMap -Path $script:filePath `
+        $script:procInst = @{ 'camp-012' = @{ instanceDate = '2026-06-24'; series = 'Daily Attestation'; status = 'COMPLETED' } }
+        $script:writeResult = Write-SPReviewerState -ReviewerMap $script:rvMap -Path $script:filePath `
             -ProcessedInstances $script:procInst -LastRunDate '2026-06-24'
 
         $script:readBack = Read-SPReviewerState -Path $script:filePath
+    }
+
+    It 'write reports Success' {
+        $script:writeResult.Success | Should -BeTrue
     }
 
     It 'file exists after write' {
@@ -563,57 +593,50 @@ Describe 'RS-012: Write/Read JSONL round-trip' {
         $script:readBack.RecordCount | Should -Be 1
     }
 
-    It 'round-trip preserves reviewer name key' {
-        $script:readBack.ReviewerMap.ContainsKey('Kim RoundTrip') | Should -BeTrue
+    It 'round-trip preserves the stable reviewer key (id-based, since the item carried one)' {
+        $script:readBack.ReviewerMap.ContainsKey('id:rv-kim') | Should -BeTrue
+        $script:readBack.ReviewerMap['id:rv-kim']['reviewerName'] | Should -Be 'Kim RoundTrip'
     }
 
     It 'round-trip preserves series data' {
-        $script:readBack.ReviewerMap['Kim RoundTrip']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:0624'
+        $script:readBack.ReviewerMap['id:rv-kim']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:20260624'
     }
 
     It 'round-trip preserves LastRunDate' {
         $script:readBack.LastRunDate | Should -Be '2026-06-24'
     }
 
-    It 'round-trip preserves Exists=true' {
-        $script:readBack.Exists | Should -BeTrue
+    It 'overwrite of an existing file also succeeds (File.Replace path)' {
+        $second = Write-SPReviewerState -ReviewerMap $script:rvMap -Path $script:filePath `
+            -ProcessedInstances $script:procInst -LastRunDate '2026-06-25'
+        $second.Success | Should -BeTrue
+        (Read-SPReviewerState -Path $script:filePath).LastRunDate | Should -Be '2026-06-25'
     }
 }
 
 # ---------------------------------------------------------------------------
-# RS-013: ProcessedInstances tracking
+# RS-013: Update does NOT mark ProcessedInstances (orchestrator owns it)
 # ---------------------------------------------------------------------------
-Describe 'RS-013: ProcessedInstances tracking' {
-    BeforeAll {
-        $script:rvMap = @{}
-        $script:procInst = @{}
-
+Describe 'RS-013: Update-SPReviewerState does not guard on or mark ProcessedInstances' {
+    It 'processes an instance even when its id is already in ProcessedInstances, and marks nothing' {
+        # v2.1 contract: the earlier in-function guard is what made reviewer state
+        # never populate (the entitlement update had already marked every instance),
+        # and the marking froze ACTIVE campaigns at their first snapshot.
+        $rvMap = @{}
+        $procInst = @{ 'camp-013' = $true }
         $items = @(
             (New-TestResolvedItem -ItemKey 'id-pi1|ent-pi1|src-pi1' -ReviewerName 'Leo Proc' `
                 -HonestDecision 'Approved' -IsGenuineDecision $true)
         )
-        $script:result = Update-SPReviewerState -ReviewerMap $script:rvMap `
-            -ResolvedItems $items -ProcessedInstances $script:procInst `
+        $result = Update-SPReviewerState -ReviewerMap $rvMap `
+            -ResolvedItems $items -ProcessedInstances $procInst `
             -InstanceId 'camp-013' -InstanceDate '2026-06-24' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
-    }
 
-    It 'adds InstanceId to ProcessedInstances' {
-        $script:result.ProcessedInstances.ContainsKey('camp-013') | Should -BeTrue
-    }
-
-    It 'records date and series in ProcessedInstances entry' {
-        $script:result.ProcessedInstances['camp-013'].date   | Should -Be '2026-06-24'
-        $script:result.ProcessedInstances['camp-013'].series | Should -Be 'Daily Attestation'
-    }
-
-    It 'ProcessedInstances round-trips through Write/Read' {
-        $path = Join-Path $TestDrive 'pi-reviewer.jsonl'
-        Write-SPReviewerState -ReviewerMap $script:rvMap -Path $path `
-            -ProcessedInstances $script:result.ProcessedInstances -LastRunDate '2026-06-24'
-
-        $readBack = Read-SPReviewerState -Path $path
-        $readBack.ProcessedInstances.ContainsKey('camp-013') | Should -BeTrue
+        $result.ReviewersNew | Should -Be 1
+        $rvMap.ContainsKey('nm:Leo Proc') | Should -BeTrue
+        # Only the pre-existing key remains; the function added nothing.
+        $procInst.Count | Should -Be 1
     }
 }
 
@@ -637,12 +660,16 @@ Describe 'RS-014: Reviewer email and id extracted from resolved items' {
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
     }
 
+    It 'keys the record by ReviewerId when present' {
+        $script:rvMap.ContainsKey('id:rv-mia-001') | Should -BeTrue
+    }
+
     It 'stores reviewerEmail from resolved items' {
-        $script:rvMap['Mia Identity']['reviewerEmail'] | Should -Be 'mia@corp.com'
+        $script:rvMap['id:rv-mia-001']['reviewerEmail'] | Should -Be 'mia@corp.com'
     }
 
     It 'stores reviewerId from resolved items' {
-        $script:rvMap['Mia Identity']['reviewerId'] | Should -Be 'rv-mia-001'
+        $script:rvMap['id:rv-mia-001']['reviewerId'] | Should -Be 'rv-mia-001'
     }
 }
 
@@ -652,7 +679,6 @@ Describe 'RS-014: Reviewer email and id extracted from resolved items' {
 Describe 'RS-015: Multiple instances with different dates processed correctly' {
     BeforeAll {
         $script:rvMap = @{}
-        $script:procInst = @{}
 
         # Instance 1: 2026-06-22 (Mon) -- Completed
         $items1 = @(
@@ -660,7 +686,7 @@ Describe 'RS-015: Multiple instances with different dates processed correctly' {
                 -HonestDecision 'Approved' -IsGenuineDecision $true)
         )
         Update-SPReviewerState -ReviewerMap $script:rvMap `
-            -ResolvedItems $items1 -ProcessedInstances $script:procInst `
+            -ResolvedItems $items1 `
             -InstanceId 'camp-015a' -InstanceDate '2026-06-22' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-22'
 
@@ -670,7 +696,7 @@ Describe 'RS-015: Multiple instances with different dates processed correctly' {
                 -HonestDecision 'Undecided' -IsGenuineDecision $false -IsAutoApproved $false)
         )
         Update-SPReviewerState -ReviewerMap $script:rvMap `
-            -ResolvedItems $items2 -ProcessedInstances $script:procInst `
+            -ResolvedItems $items2 `
             -InstanceId 'camp-015b' -InstanceDate '2026-06-23' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-23'
 
@@ -680,38 +706,174 @@ Describe 'RS-015: Multiple instances with different dates processed correctly' {
                 -HonestDecision 'Approved' -IsGenuineDecision $true)
         )
         $script:result3 = Update-SPReviewerState -ReviewerMap $script:rvMap `
-            -ResolvedItems $items3 -ProcessedInstances $script:procInst `
+            -ResolvedItems $items3 `
             -InstanceId 'camp-015c' -InstanceDate '2026-06-24' `
             -SeriesName 'Daily Attestation' -TodayLabel '2026-06-24'
     }
 
     It 'dayLog shows all three days in order' {
-        $script:rvMap['Nate MultiDay']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:0622|M:0623|C:0624'
+        $script:rvMap['nm:Nate MultiDay']['series']['Daily Attestation']['dayLog'] | Should -Be 'C:20260622|M:20260623|C:20260624'
     }
 
     It 'campaignsObserved = 3' {
-        [int]$script:rvMap['Nate MultiDay']['series']['Daily Attestation']['campaignsObserved'] | Should -Be 3
+        [int]$script:rvMap['nm:Nate MultiDay']['series']['Daily Attestation']['campaignsObserved'] | Should -Be 3
     }
 
     It 'campaignsCompleted = 2' {
-        [int]$script:rvMap['Nate MultiDay']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 2
+        [int]$script:rvMap['nm:Nate MultiDay']['series']['Daily Attestation']['campaignsCompleted'] | Should -Be 2
     }
 
     It 'campaignsMissed = 1' {
-        [int]$script:rvMap['Nate MultiDay']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 1
-    }
-
-    It 'all three instances tracked in ProcessedInstances' {
-        $script:procInst.ContainsKey('camp-015a') | Should -BeTrue
-        $script:procInst.ContainsKey('camp-015b') | Should -BeTrue
-        $script:procInst.ContainsKey('camp-015c') | Should -BeTrue
+        [int]$script:rvMap['nm:Nate MultiDay']['series']['Daily Attestation']['campaignsMissed'] | Should -Be 1
     }
 
     It 'global engagementScore = 67 (2 completed / 3 observed)' {
-        [int]$script:rvMap['Nate MultiDay']['global']['engagementScore'] | Should -Be 67
+        [int]$script:rvMap['nm:Nate MultiDay']['global']['engagementScore'] | Should -Be 67
     }
 
     It 'ReviewersUpdated increments on existing reviewer' {
         $script:result3.ReviewersUpdated | Should -Be 1
+    }
+}
+
+# ---------------------------------------------------------------------------
+# RS-016: Stable identity keying
+# ---------------------------------------------------------------------------
+Describe 'RS-016: stable identity -- renames keep history, same names never merge' {
+    It 'a display-name change keeps the same record and history (id-keyed)' {
+        $rvMap = @{}
+        $before = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'Jane Smith' `
+            -ReviewerId 'rv-jane' -HonestDecision 'Approved' -IsGenuineDecision $true
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($before) `
+            -InstanceId 'c1' -InstanceDate '2026-06-22' -SeriesName 'Daily' -TodayLabel '2026-06-22' | Out-Null
+
+        $after = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'Jane Doe' `
+            -ReviewerId 'rv-jane' -HonestDecision 'Approved' -IsGenuineDecision $true
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($after) `
+            -InstanceId 'c2' -InstanceDate '2026-06-23' -SeriesName 'Daily' -TodayLabel '2026-06-23' | Out-Null
+
+        $rvMap.Count | Should -Be 1
+        $rvMap['id:rv-jane']['reviewerName'] | Should -Be 'Jane Doe'   # label refreshed
+        [int]$rvMap['id:rv-jane']['series']['Daily']['campaignsObserved'] | Should -Be 2   # history intact
+    }
+
+    It 'two reviewers sharing a display name but different ids never merge' {
+        $rvMap = @{}
+        $smith1 = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'John Smith' `
+            -ReviewerId 'rv-js-1' -HonestDecision 'Approved' -IsGenuineDecision $true
+        $smith2 = New-TestResolvedItem -ItemKey 'd|e|f' -ReviewerName 'John Smith' `
+            -ReviewerId 'rv-js-2' -HonestDecision 'Undecided' -IsGenuineDecision $false -IsAutoApproved $false
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($smith1, $smith2) `
+            -InstanceId 'c1' -InstanceDate '2026-06-24' -SeriesName 'Daily' -TodayLabel '2026-06-24' | Out-Null
+
+        $rvMap.Count | Should -Be 2
+        $rvMap['id:rv-js-1']['series']['Daily']['dayLog'] | Should -Be 'C:20260624'
+        $rvMap['id:rv-js-2']['series']['Daily']['dayLog'] | Should -Be 'M:20260624'
+    }
+
+    It 'an item with an id but a blank display name still counts' {
+        $rvMap = @{}
+        $anon = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName '' `
+            -ReviewerId 'rv-anon' -HonestDecision 'Approved' -IsGenuineDecision $true
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($anon) `
+            -InstanceId 'c1' -InstanceDate '2026-06-24' -SeriesName 'Daily' -TodayLabel '2026-06-24' | Out-Null
+        $rvMap.ContainsKey('id:rv-anon') | Should -BeTrue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# RS-017: ACTIVE re-processing converges (day upgrade)
+# ---------------------------------------------------------------------------
+Describe 'RS-017: re-processing an ACTIVE instance upgrades the day without double-counting' {
+    It 'M at 09:00 upgraded to C at 18:00 settles at one completed day' {
+        $rvMap = @{}
+        # Morning capture: nothing decided yet
+        $morning = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'Olive Active' `
+            -HonestDecision 'Undecided' -IsGenuineDecision $false -IsAutoApproved $false
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($morning) `
+            -InstanceId 'camp-act' -InstanceDate '2026-06-24' -SeriesName 'Daily' `
+            -InstanceStatus 'ACTIVE' -TodayLabel '2026-06-24' | Out-Null
+
+        $sd0 = $rvMap['nm:Olive Active']['series']['Daily']
+        $sd0['dayLog'] | Should -Be 'M:20260624'
+        [int]$sd0['campaignsMissed'] | Should -Be 1
+
+        # Evening re-capture of the SAME instance: reviewer finished everything
+        $evening = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'Olive Active' `
+            -HonestDecision 'Approved' -IsGenuineDecision $true
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($evening) `
+            -InstanceId 'camp-act' -InstanceDate '2026-06-24' -SeriesName 'Daily' `
+            -InstanceStatus 'COMPLETED' -TodayLabel '2026-06-24' | Out-Null
+
+        $sd = $rvMap['nm:Olive Active']['series']['Daily']
+        $sd['dayLog'] | Should -Be 'C:20260624'
+        [int]$sd['campaignsObserved']  | Should -Be 1
+        [int]$sd['campaignsCompleted'] | Should -Be 1
+        [int]$sd['campaignsMissed']    | Should -Be 0
+        [int]$rvMap['nm:Olive Active']['global']['engagementScore'] | Should -Be 100
+    }
+}
+
+# ---------------------------------------------------------------------------
+# RS-018: Out-of-order backfill yields date-ordered streaks
+# ---------------------------------------------------------------------------
+Describe 'RS-018: streaks derive from date order, not processing order' {
+    It 'processing 06-25(C) then backfilling 06-23(M) still ends on a completion streak' {
+        $rvMap = @{}
+        $c = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'Pat Backfill' `
+            -HonestDecision 'Approved' -IsGenuineDecision $true
+        $m = New-TestResolvedItem -ItemKey 'a|b|c' -ReviewerName 'Pat Backfill' `
+            -HonestDecision 'Undecided' -IsGenuineDecision $false -IsAutoApproved $false
+
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($c) `
+            -InstanceId 'c-new' -InstanceDate '2026-06-25' -SeriesName 'Daily' -TodayLabel '2026-06-25' | Out-Null
+        Update-SPReviewerState -ReviewerMap $rvMap -ResolvedItems @($m) `
+            -InstanceId 'c-old' -InstanceDate '2026-06-23' -SeriesName 'Daily' -TodayLabel '2026-06-25' | Out-Null
+
+        $streaks = $rvMap['nm:Pat Backfill']['series']['Daily']['streaks']
+        # Date order is M(06-23) -> C(06-25): the reviewer's most recent day is a completion.
+        [int]$streaks['currentStreak']     | Should -Be 1
+        [int]$streaks['currentMissStreak'] | Should -Be 0
+    }
+}
+
+# ---------------------------------------------------------------------------
+# RS-019: Corrupt lines counted, valid records still load
+# ---------------------------------------------------------------------------
+Describe 'RS-019: corrupt lines are counted in SkippedLines' {
+    It 'reports skipped lines and loads the valid records' {
+        $path = Join-Path $TestDrive 'corrupt-reviewer.jsonl'
+        $valid = '{"reviewerKey":"nm:Ok Reviewer","reviewerName":"Ok Reviewer","series":{},"global":{}}'
+        @('{"_meta":{"lastRunDate":"2026-06-24"}}', $valid, 'not json at all {{{') |
+            Set-Content -Path $path -Encoding UTF8
+        $r = Read-SPReviewerState -Path $path -WarningAction SilentlyContinue
+        $r.RecordCount  | Should -Be 1
+        $r.SkippedLines | Should -Be 1
+        $r.ReviewerMap.ContainsKey('nm:Ok Reviewer') | Should -BeTrue
+    }
+
+    It 'legacy records without reviewerKey fall back to the name key' {
+        $path = Join-Path $TestDrive 'legacy-reviewer.jsonl'
+        @('{"reviewerName":"Legacy Reviewer","series":{},"global":{}}') |
+            Set-Content -Path $path -Encoding UTF8
+        $r = Read-SPReviewerState -Path $path
+        $r.ReviewerMap.ContainsKey('nm:Legacy Reviewer') | Should -BeTrue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# RS-020: ISO week labels across the year boundary
+# ---------------------------------------------------------------------------
+Describe 'RS-020: ISO week labels are correct across the year boundary' {
+    It 'labels Mon 2029-12-31 as 2030-W01 (Thursday rule)' {
+        Get-SPIsoWeekString -Date ([datetime]'2029-12-31') | Should -Be '2030-W01'
+    }
+
+    It 'labels Fri 2027-01-01 as 2026-W53' {
+        Get-SPIsoWeekString -Date ([datetime]'2027-01-01') | Should -Be '2026-W53'
+    }
+
+    It 'labels a mid-year date normally' {
+        Get-SPIsoWeekString -Date ([datetime]'2026-06-22') | Should -Be '2026-W26'
     }
 }
