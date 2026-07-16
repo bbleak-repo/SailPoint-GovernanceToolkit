@@ -1,0 +1,2565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IAM Application Integration Intake</title>
+<style>
+/* ====================================================
+   TABBED REPORT FRAMEWORK -- LIGHT THEME
+   SailPoint color scheme
+   ==================================================== */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:      #336699;
+    --primary-dark:  #264d73;
+    --primary-light: #4a7fb5;
+    --success:      #339933;
+    --success-bg:   #edf6ef;
+    --danger:       #CC3333;
+    --danger-bg:    #fdf0ef;
+    --warning:      #FF8800;
+    --warning-bg:   #fff8ec;
+    --sidebar-bg:   #1e2a3a;
+    --sidebar-hover: rgba(255,255,255,0.05);
+    --sidebar-active-bg: rgba(91,155,213,0.10);
+    --header-bg:    #2c3e50;
+    --accent:       #5B9BD5;
+    --text:         #2c3e50;
+    --text-muted:   #555e70;
+    --bg:           #f7f8fa;
+    --surface:      #ffffff;
+    --border:       #e0e4ea;
+    --border-light: #eaecf0;
+    --code-bg:      #f5f6f8;
+    --table-header: #34495e;
+    --table-alt:    #f9f9f9;
+    --sidebar-w:    220px;
+}
+
+html { font-size: 15px; }
+
+body {
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+}
+
+/* ---- STICKY TOP BAND ---- */
+#top-band {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---- REPORT HEADER ---- */
+#report-header {
+    background: var(--header-bg);
+    color: #ffffff;
+    padding: 14px 24px;
+    border-bottom: 3px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.title-block {}
+
+.report-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.01em;
+}
+
+.report-sub {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.65);
+    margin-top: 2px;
+}
+
+.meta-items {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.meta-item {
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.60);
+    line-height: 1.4;
+}
+
+.meta-item strong {
+    display: block;
+    color: rgba(255,255,255,0.85);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* ---- MOBILE TAB BAR (hidden on desktop) ---- */
+#mobile-nav {
+    display: none;
+    background: var(--sidebar-bg);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    border-bottom: 2px solid var(--accent);
+    scrollbar-width: none;
+}
+
+#mobile-nav::-webkit-scrollbar { display: none; }
+
+#mobile-nav a {
+    display: inline-block;
+    padding: 10px 14px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.65);
+    text-decoration: none;
+    border-bottom: 3px solid transparent;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+#mobile-nav a.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* ---- LAYOUT: SIDEBAR + CONTENT ---- */
+#app-layout {
+    display: flex;
+    min-height: calc(100vh - 80px);
+}
+
+/* ---- SIDEBAR ---- */
+#sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--sidebar-bg);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+    align-self: flex-start;
+}
+
+#sidebar-inner {
+    padding: 20px 0;
+}
+
+.sidebar-label {
+    font-size: 0.60rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.35);
+    padding: 0 16px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 8px;
+}
+
+#sidebar a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    font-size: 0.80rem;
+    font-weight: 500;
+    color: #8892a8;
+    text-decoration: none;
+    border-left: 3px solid transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    line-height: 1.3;
+}
+
+#sidebar a:hover {
+    color: #c8d0e0;
+    background: var(--sidebar-hover);
+}
+
+#sidebar a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--sidebar-active-bg);
+    font-weight: 600;
+}
+
+.sidebar-num {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.10);
+    font-size: 0.60rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: rgba(255,255,255,0.50);
+}
+
+#sidebar a.active .sidebar-num {
+    background: var(--accent);
+    color: var(--sidebar-bg);
+}
+
+/* ---- MAIN CONTENT AREA ---- */
+#content-area {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.report-section {
+    min-height: calc(100vh - 80px);
+    padding: 28px 36px 52px;
+    max-width: 960px;
+}
+
+/* ---- SECTION CONTENT TYPOGRAPHY ---- */
+.report-section h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--primary);
+    margin: 0 0 16px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent);
+    letter-spacing: -0.01em;
+}
+
+.report-section h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--header-bg);
+    margin: 28px 0 10px 0;
+}
+
+.report-section h4 {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 20px 0 8px 0;
+}
+
+.report-section p {
+    font-size: 0.875rem;
+    margin-bottom: 12px;
+    color: var(--text);
+    line-height: 1.65;
+}
+
+.report-section p:last-child { margin-bottom: 0; }
+
+/* ---- LISTS ---- */
+.report-section ul,
+.report-section ol {
+    padding-left: 22px;
+    margin: 8px 0 14px 0;
+}
+
+.report-section li {
+    font-size: 0.875rem;
+    padding: 3px 0;
+    line-height: 1.55;
+    color: var(--text);
+}
+
+.report-section li + li {
+    margin-top: 2px;
+}
+
+/* ---- TABLES ---- */
+.report-section table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    margin: 14px 0 18px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.report-section thead tr {
+    background: var(--table-header);
+    color: #ffffff;
+}
+
+.report-section thead th {
+    padding: 9px 14px;
+    text-align: left;
+    font-size: 0.70rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.report-section thead th:first-child {
+    color: var(--accent);
+}
+
+.report-section tbody tr:nth-child(even) {
+    background: var(--table-alt);
+}
+
+.report-section tbody tr:nth-child(odd) {
+    background: var(--surface);
+}
+
+.report-section tbody tr:hover {
+    background: #eef3fb;
+}
+
+.report-section td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+    line-height: 1.45;
+}
+
+.report-section td:first-child {
+    font-weight: 600;
+    color: var(--primary-dark);
+}
+
+/* ---- CODE BLOCKS ---- */
+.report-section pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    margin: 12px 0 16px 0;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.report-section code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+    font-size: 0.84em;
+}
+
+.report-section p code,
+.report-section li code,
+.report-section td code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.82em;
+    color: var(--danger);
+}
+
+.report-section pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 1em;
+}
+
+/* ---- CALLOUT BOXES ---- */
+.callout {
+    border-radius: 6px;
+    padding: 13px 16px;
+    margin: 14px 0;
+    font-size: 0.84rem;
+}
+
+.callout-label {
+    font-size: 0.65rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    margin-bottom: 6px;
+}
+
+.callout p {
+    font-size: 0.84rem;
+    margin-bottom: 0;
+}
+
+.callout-info {
+    background: #eef3fb;
+    border: 1px solid #b8d0ee;
+    border-left: 4px solid var(--primary);
+}
+
+.callout-info .callout-label { color: var(--primary); }
+
+.callout-warning {
+    background: var(--warning-bg);
+    border: 1px solid #f0d080;
+    border-left: 4px solid var(--warning);
+}
+
+.callout-warning .callout-label { color: var(--warning); }
+
+.callout-success {
+    background: var(--success-bg);
+    border: 1px solid #b0d8ba;
+    border-left: 4px solid var(--success);
+}
+
+.callout-success .callout-label { color: var(--success); }
+
+.callout-danger {
+    background: var(--danger-bg);
+    border: 1px solid #f0b8b4;
+    border-left: 4px solid var(--danger);
+}
+
+.callout-danger .callout-label { color: var(--danger); }
+
+/* ---- CONTENT CARDS ---- */
+.content-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.content-card .card-header {
+    background: var(--sidebar-bg);
+    color: #ffffff;
+    padding: 11px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.content-card .card-badge {
+    width: 26px;
+    height: 26px;
+    background: var(--accent);
+    color: var(--sidebar-bg);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.content-card .card-header h3 {
+    font-size: 0.88rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #ffffff;
+    margin: 0;
+    border: none;
+}
+
+.content-card .card-body {
+    padding: 18px 22px;
+}
+
+/* ---- PARAMETER TABLE (for CLI docs) ---- */
+.param-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin: 10px 0 16px 0;
+}
+
+.param-table thead tr {
+    background: var(--primary);
+    color: #ffffff;
+}
+
+.param-table thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.param-table tbody tr:nth-child(even) {
+    background: var(--table-alt);
+}
+
+.param-table tbody td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+}
+
+.param-table tbody td:first-child {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-weight: 600;
+    color: var(--primary-dark);
+    white-space: nowrap;
+}
+
+/* ---- STAT CARDS ---- */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 14px 0;
+}
+
+.stat-card {
+    background: var(--header-bg);
+    color: #ffffff;
+    border-radius: 7px;
+    padding: 16px 14px;
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 6px;
+}
+
+.stat-label {
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: rgba(255,255,255,0.82);
+    line-height: 1.3;
+}
+
+/* ---- DETAILS/SUMMARY (collapsible) ---- */
+.report-section details {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 10px 0;
+    overflow: hidden;
+}
+
+.report-section summary {
+    padding: 10px 16px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--primary);
+    cursor: pointer;
+    background: var(--code-bg);
+    border-bottom: 1px solid var(--border);
+    list-style: none;
+}
+
+.report-section summary::-webkit-details-marker { display: none; }
+
+.report-section summary::before {
+    content: '+ ';
+    font-weight: 800;
+    color: var(--primary);
+}
+
+.report-section details[open] summary::before {
+    content: '- ';
+}
+
+.report-section details .detail-body {
+    padding: 14px 18px;
+}
+
+/* ---- STATUS BADGES ---- */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.badge-required {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+.badge-optional {
+    background: #eef3fb;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+}
+
+.badge-default {
+    background: var(--code-bg);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+
+/* ---- PRINT STYLES ---- */
+@media print {
+    #top-band, #sidebar, #mobile-nav { display: none !important; }
+    #app-layout { display: block; }
+    #content-area { width: 100%; }
+    .report-section {
+        display: block !important;
+        max-width: 100%;
+        padding: 12pt 0;
+    }
+    .report-section + .report-section {
+        page-break-before: always;
+    }
+    body {
+        background: #ffffff;
+        color: #000000;
+        font-size: 10pt;
+    }
+    .report-section h2 {
+        color: #000000;
+        border-bottom-color: #cccccc;
+    }
+    .report-section pre {
+        border-color: #cccccc;
+        background: #f5f5f5;
+    }
+    .report-section table {
+        border-color: #cccccc;
+    }
+    .report-section thead tr {
+        background: #333333 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .callout {
+        border-left-width: 3px;
+    }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* ---- MOBILE LAYOUT ---- */
+@media (max-width: 767px) {
+    #sidebar { display: none !important; }
+    #mobile-nav { display: block; }
+    #top-band { position: sticky; top: 0; z-index: 1000; }
+    #app-layout { display: block; }
+    #content-area { width: 100%; }
+    .report-section {
+        padding: 20px 16px 36px;
+    }
+    .meta-items { display: none; }
+    .stat-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 768px) {
+    #top-band { position: sticky; top: 0; z-index: 1000; }
+    #sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+    }
+}
+
+/* ─── SIDEBAR GROUP LABELS ─────────────────────────────────────── */
+.sidebar-group-label {
+    font-size: 0.59rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(91,155,213,0.75);
+    padding: 14px 16px 5px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    margin-top: 6px;
+}
+.sidebar-group-label:first-of-type { border-top: none; margin-top: 0; }
+
+/* Sub-tab links within SDK Features */
+.sidebar-sub {
+    padding-left: 28px !important;
+    font-size: 0.74rem !important;
+    color: #5a6478 !important;
+    border-left-color: transparent !important;
+}
+.sidebar-sub:hover { color: #9aaac0 !important; }
+.sidebar-sub.active { color: var(--accent) !important; border-left-color: var(--accent) !important; }
+
+/* Dark code blocks (override framework's light code-bg) */
+.report-section pre {
+    background: #1e2738 !important;
+    border-color: #2d3a50 !important;
+}
+.report-section pre code {
+    color: #c9d7f0 !important;
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+/* Wider sidebar to fit grouped labels */
+:root { --sidebar-w: 238px; }
+
+/* Section max reading width */
+.report-section { max-width: 820px; }
+
+:root {
+  --primary: #2d5a8a;
+  --sidebar-bg: #1b2a4a;
+  --header-bg: #1b2a4a;
+  --accent: #00897b;
+}
+
+</style>
+</head>
+<body>
+
+<div id="top-band">
+  <div id="report-header">
+    <div class="title-block">
+      <div class="report-title">IAM Application Integration Intake</div>
+      <div class="report-sub">User Guide -- HTML Intake Tool &amp; PowerShell Consolidator</div>
+    </div>
+    <div class="meta-items">
+<div class="meta-item"><strong>Version</strong>1.0.0</div>
+<div class="meta-item"><strong>Generated</strong>2026-06-27</div>
+<div class="meta-item"><strong>Products</strong>SailPoint, CyberArk, Okta/Entra ID</div>
+
+    </div>
+  </div>
+  <div id="mobile-nav">
+<a href="javascript:void(0)" onclick="showSection('foundations-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-what-this-is'); return false;">1. What This Is</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-prerequisites'); return false;">2. Prerequisites</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-installation'); return false;">3. Installation</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-architecture-overview'); return false;">4. Architecture Overvi</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-how-the-decision-trees-work'); return false;">5. How the Decision Tr</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-known-app-catalog'); return false;">6. Known App Catalog</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-csv-output-schemas'); return false;">7. CSV Output Schemas</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-data-persistence'); return false;">8. Data Persistence</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-security-considerations'); return false;">9. Security Considerat</a>
+<a href="javascript:void(0)" onclick="showSection('foundations-getting-help'); return false;">10. Getting Help</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-opening-the-tool'); return false;">1. Opening the Tool</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-starting-a-new-application'); return false;">2. Starting a New Appl</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-1-application-identity'); return false;">3. Wizard Step 1: Appl</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-2-how-users-log-in'); return false;">4. Wizard Step 2: How </a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-3-access-permissions'); return false;">5. Wizard Step 3: Acce</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-4-sailpoint-governance'); return false;">6. Wizard Step 4: Sail</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-5-cyberark-privileged-access'); return false;">7. Wizard Step 5: Cybe</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-6-okta-entra-id'); return false;">8. Wizard Step 6: Okta</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-7-review-export'); return false;">9. Wizard Step 7: Revi</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-portfolio-mode-multiple-applications'); return false;">10. Portfolio Mode (Mu</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-session-recovery'); return false;">11. Session Recovery</a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-troubleshooting'); return false;">12. Troubleshooting</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-quick-start'); return false;">1. Quick Start</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-parameters'); return false;">2. Parameters</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-adaptive-format-detection'); return false;">3. Adaptive Format Det</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-app-identity-and-merge'); return false;">4. App Identity and Me</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-value-normalization'); return false;">5. Value Normalization</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-fuzzy-canonical-mapping'); return false;">6. Fuzzy Canonical Map</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-detail-fields-detail'); return false;">7. Detail Fields (`_de</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-output-files'); return false;">8. Output Files</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-schema-learning-and-reuse'); return false;">9. Schema Learning and</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-examples'); return false;">10. Examples</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-extending-the-parser'); return false;">11. Extending the Pars</a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-troubleshooting'); return false;">12. Troubleshooting</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-quick-start'); return false;">1. Quick Start</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-parameters'); return false;">2. Parameters</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-authentication'); return false;">3. Authentication</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-direction-modes'); return false;">4. Direction Modes</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-path-handling'); return false;">5. Path Handling</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-file-filtering'); return false;">6. File Filtering</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-whatif-mode'); return false;">7. WhatIf Mode</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-logging'); return false;">8. Logging</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-error-handling'); return false;">9. Error Handling</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-examples'); return false;">10. Examples</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-workflow-sharepoint-to-consolidator-pipeline'); return false;">11. Workflow: SharePoi</a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-technical-notes'); return false;">12. Technical Notes</a>
+
+  </div>
+</div>
+
+<div id="app-layout">
+  <div id="sidebar">
+    <div id="sidebar-inner">
+<div class="sidebar-group-label">Foundations</div>
+<a href="javascript:void(0)" onclick="showSection('foundations-overview'); return false;"><span class="sidebar-num">1</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-what-this-is'); return false;"><span class="sidebar-num">2</span><span>1. What This Is</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-prerequisites'); return false;"><span class="sidebar-num">3</span><span>2. Prerequisites</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-installation'); return false;"><span class="sidebar-num">4</span><span>3. Installation</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-architecture-overview'); return false;"><span class="sidebar-num">5</span><span>4. Architecture Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-how-the-decision-trees-work'); return false;"><span class="sidebar-num">6</span><span>5. How the Decision Trees Work</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-known-app-catalog'); return false;"><span class="sidebar-num">7</span><span>6. Known App Catalog</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-csv-output-schemas'); return false;"><span class="sidebar-num">8</span><span>7. CSV Output Schemas</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-data-persistence'); return false;"><span class="sidebar-num">9</span><span>8. Data Persistence</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-security-considerations'); return false;"><span class="sidebar-num">10</span><span>9. Security Considerations</span></a>
+<a href="javascript:void(0)" onclick="showSection('foundations-getting-help'); return false;"><span class="sidebar-num">11</span><span>10. Getting Help</span></a>
+<div class="sidebar-group-label">HTML Intake Tool</div>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-overview'); return false;"><span class="sidebar-num">12</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-overview'); return false;"><span class="sidebar-num">13</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-opening-the-tool'); return false;"><span class="sidebar-num">14</span><span>1. Opening the Tool</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-starting-a-new-application'); return false;"><span class="sidebar-num">15</span><span>2. Starting a New Application</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-1-application-identity'); return false;"><span class="sidebar-num">16</span><span>3. Wizard Step 1: Application Identity</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-2-how-users-log-in'); return false;"><span class="sidebar-num">17</span><span>4. Wizard Step 2: How Users Log In</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-3-access-permissions'); return false;"><span class="sidebar-num">18</span><span>5. Wizard Step 3: Access &amp; Permissions</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-4-sailpoint-governance'); return false;"><span class="sidebar-num">19</span><span>6. Wizard Step 4: SailPoint Governance</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-5-cyberark-privileged-access'); return false;"><span class="sidebar-num">20</span><span>7. Wizard Step 5: CyberArk Privileged Access</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-6-okta-entra-id'); return false;"><span class="sidebar-num">21</span><span>8. Wizard Step 6: Okta / Entra ID</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-wizard-step-7-review-export'); return false;"><span class="sidebar-num">22</span><span>9. Wizard Step 7: Review &amp; Export</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-portfolio-mode-multiple-applications'); return false;"><span class="sidebar-num">23</span><span>10. Portfolio Mode (Multiple Applications)</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-session-recovery'); return false;"><span class="sidebar-num">24</span><span>11. Session Recovery</span></a>
+<a href="javascript:void(0)" onclick="showSection('html-intake-tool-troubleshooting'); return false;"><span class="sidebar-num">25</span><span>12. Troubleshooting</span></a>
+<div class="sidebar-group-label">PowerShell Consolidator</div>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-overview'); return false;"><span class="sidebar-num">26</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-overview'); return false;"><span class="sidebar-num">27</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-quick-start'); return false;"><span class="sidebar-num">28</span><span>1. Quick Start</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-parameters'); return false;"><span class="sidebar-num">29</span><span>2. Parameters</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-adaptive-format-detection'); return false;"><span class="sidebar-num">30</span><span>3. Adaptive Format Detection</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-app-identity-and-merge'); return false;"><span class="sidebar-num">31</span><span>4. App Identity and Merge</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-value-normalization'); return false;"><span class="sidebar-num">32</span><span>5. Value Normalization</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-fuzzy-canonical-mapping'); return false;"><span class="sidebar-num">33</span><span>6. Fuzzy Canonical Mapping</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-detail-fields-detail'); return false;"><span class="sidebar-num">34</span><span>7. Detail Fields (`_detail_*`)</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-output-files'); return false;"><span class="sidebar-num">35</span><span>8. Output Files</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-schema-learning-and-reuse'); return false;"><span class="sidebar-num">36</span><span>9. Schema Learning and Reuse</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-examples'); return false;"><span class="sidebar-num">37</span><span>10. Examples</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-extending-the-parser'); return false;"><span class="sidebar-num">38</span><span>11. Extending the Parser</span></a>
+<a href="javascript:void(0)" onclick="showSection('powershell-consolidator-troubleshooting'); return false;"><span class="sidebar-num">39</span><span>12. Troubleshooting</span></a>
+<div class="sidebar-group-label">SharePoint Sync Tool</div>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-overview'); return false;"><span class="sidebar-num">40</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-overview'); return false;"><span class="sidebar-num">41</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-quick-start'); return false;"><span class="sidebar-num">42</span><span>1. Quick Start</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-parameters'); return false;"><span class="sidebar-num">43</span><span>2. Parameters</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-authentication'); return false;"><span class="sidebar-num">44</span><span>3. Authentication</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-direction-modes'); return false;"><span class="sidebar-num">45</span><span>4. Direction Modes</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-path-handling'); return false;"><span class="sidebar-num">46</span><span>5. Path Handling</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-file-filtering'); return false;"><span class="sidebar-num">47</span><span>6. File Filtering</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-whatif-mode'); return false;"><span class="sidebar-num">48</span><span>7. WhatIf Mode</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-logging'); return false;"><span class="sidebar-num">49</span><span>8. Logging</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-error-handling'); return false;"><span class="sidebar-num">50</span><span>9. Error Handling</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-examples'); return false;"><span class="sidebar-num">51</span><span>10. Examples</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-workflow-sharepoint-to-consolidator-pipeline'); return false;"><span class="sidebar-num">52</span><span>11. Workflow: SharePoint to Consolidator Pipeline</span></a>
+<a href="javascript:void(0)" onclick="showSection('sharepoint-sync-tool-technical-notes'); return false;"><span class="sidebar-num">53</span><span>12. Technical Notes</span></a>
+
+    </div>
+  </div>
+  <div id="content-area">
+<div id="section-foundations-overview" class="report-section" style="display:none">
+<h2>Foundations &mdash; Overview</h2>
+<h2 id="iam-application-integration-intake-foundations">IAM Application Integration Intake -- Foundations</h2>
+</div>
+<div id="section-foundations-what-this-is" class="report-section" style="display:none">
+<h2>1. What This Is</h2>
+<p>The IAM Application Integration Intake toolkit helps application owners provide the data that Identity &amp; Access Management teams need to onboard applications into <strong>SailPoint</strong> (access governance), <strong>CyberArk</strong> (privileged access management), and <strong>Okta/Entra ID</strong> (identity federation and SSO).</p>
+<p>It consists of three tools:</p>
+<ul><li><strong>IAM Intake Tool</strong> (<code>iam-intake-tool.html</code>) -- A self-contained HTML wizard that app owners fill out in their browser. Speaks their language (URLs, login methods, roles), not IAM jargon. Exports structured CSV and JSON files.</li><li><strong>Intake Data Consolidator</strong> (<code>Merge-IAMIntakeData.ps1</code>) -- A PowerShell script that adaptively reads existing Excel and Word questionnaires (any format -- tabular, key-value, structured templates, or .docx), normalizes the data, merges SailPoint, CyberArk, and Okta/Entra entries by application name, and produces a consolidated XLSX workbook, interactive HTML browser, JSON payload, and per-product CSVs.</li><li><strong>SharePoint Sync Tool</strong> (<code>Sync-SharePointSite.ps1</code>) -- A PowerShell script for bidirectional file sync with SharePoint Server on-premises (2013+) via REST API. Downloads questionnaire files from deep folder paths and uploads consolidated reports back.</li></ul>
+<p>Together, these tools replace ad-hoc emails and meetings with structured, repeatable data collection that feeds directly into IAM onboarding workflows.</p>
+</div>
+<div id="section-foundations-prerequisites" class="report-section" style="display:none">
+<h2>2. Prerequisites</h2>
+<h3 id="html-intake-tool">HTML Intake Tool</h3>
+<table>
+<thead><tr>
+<th>Requirement</th>
+<th>Minimum</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td>Browser</td>
+<td>Any modern browser</td>
+<td>Chrome, Edge, Firefox, Safari (2020+)</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>None</td>
+<td>Works fully offline -- save and open locally</td>
+</tr>
+<tr>
+<td>Authentication</td>
+<td>None</td>
+<td>No backend, no login required</td>
+</tr>
+</tbody></table>
+<h3 id="powershell-consolidator">PowerShell Consolidator</h3>
+<table>
+<thead><tr>
+<th>Requirement</th>
+<th>Minimum</th>
+<th>Notes</th>
+</tr></thead><tbody>
+<tr>
+<td>PowerShell</td>
+<td>5.1 (Windows) or 7.x (cross-platform)</td>
+<td>Windows PowerShell ships with Windows 10/11</td>
+</tr>
+<tr>
+<td>ImportExcel module</td>
+<td>Latest</td>
+<td><code>Install-Module ImportExcel -Scope CurrentUser</code></td>
+</tr>
+<tr>
+<td>Excel</td>
+<td>NOT required</td>
+<td>ImportExcel uses EPPlus (.NET library), not COM</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>File system access to Excel files</td>
+<td>Local, network share, or mapped drive</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-foundations-installation" class="report-section" style="display:none">
+<h2>3. Installation</h2>
+<h3 id="html-intake-tool">HTML Intake Tool</h3>
+<p>No installation required. Distribute <code>iam-intake-tool.html</code> to app owners via:</p>
+<ul><li>Email attachment</li><li>SharePoint/OneDrive shared link</li><li>Internal documentation portal</li><li>Network file share</li></ul>
+<p>The file is self-contained (108 KB) with zero external dependencies. App owners open it in any browser.</p>
+<h3 id="powershell-consolidator">PowerShell Consolidator</h3>
+<ol><li>Copy <code>Merge-IAMIntakeData.ps1</code> to a working directory on the IAM team's Windows workstation or server.</li><li>Install the ImportExcel module (one-time):</li></ol>
+<pre><code>Install-Module ImportExcel -Scope CurrentUser</code></pre>
+<ol><li>Verify:</li></ol>
+<pre><code>Get-Module -ListAvailable -Name ImportExcel</code></pre>
+</div>
+<div id="section-foundations-architecture-overview" class="report-section" style="display:none">
+<h2>4. Architecture Overview</h2>
+<p>The data flows through three stages:</p>
+<pre><code>STAGE 1: Data Collection
+  App Owner fills out iam-intake-tool.html  -or-
+  App Owner fills out Excel/Word questionnaire (on SharePoint or local)
+
+STAGE 2: Data Consolidation
+  Sync-SharePointSite.ps1 downloads .xlsx/.docx from SharePoint (optional)
+  Merge-IAMIntakeData.ps1 reads all formats, normalizes, merges by app name
+  Outputs: XLSX workbook, HTML browser, JSON payload, per-product CSVs
+
+STAGE 3: Product Onboarding
+  SailPoint: IAM-Intake-SailPoint-&lt;date&gt;.csv -&gt; GovernanceToolkit
+  CyberArk:  IAM-Intake-CyberArk-&lt;date&gt;.csv -&gt; Platform/Safe setup
+  Okta:      IAM-Intake-OktaEntra-&lt;date&gt;.csv -&gt; Migration toolkit</code></pre>
+<h3 id="consolidator-output-files">Consolidator Output Files</h3>
+<table>
+<thead><tr>
+<th>File</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>IAM-Intake-Consolidated-&lt;date&gt;.xlsx</code></td>
+<td>Multi-sheet workbook: Master, per-product, RolesGroups, Accounts, Conflicts, Unmapped, Log</td>
+</tr>
+<tr>
+<td><code>IAM-Intake-Browser-&lt;date&gt;.html</code></td>
+<td>Interactive HTML app browser with dropdown search and per-app sections</td>
+</tr>
+<tr>
+<td><code>IAM-Intake-Data.json</code></td>
+<td>Stable-name JSON payload (also date-stamped copy)</td>
+</tr>
+<tr>
+<td><code>IAM-Intake-Consolidated-&lt;date&gt;.csv</code></td>
+<td>Flat consolidated CSV (all apps, all fields)</td>
+</tr>
+<tr>
+<td><code>IAM-Intake-SailPoint/CyberArk/OktaEntra-&lt;date&gt;.csv</code></td>
+<td>Per-product CSVs for downstream toolkits</td>
+</tr>
+<tr>
+<td><code>IAM-Intake-Mapping-&lt;date&gt;.json</code></td>
+<td>Processing log (formats detected, mapping scores)</td>
+</tr>
+</tbody></table>
+<h3 id="what-each-product-gets">What Each Product Gets</h3>
+<table>
+<thead><tr>
+<th>Product</th>
+<th>Key Data Points</th>
+<th>Downstream Action</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>SailPoint</strong></td>
+<td>Integration pattern (1-4), file delivery method (A-F), API capability, RBAC roles, v2 field availability</td>
+<td>Connector selection, disconnected app onboarding, campaign setup</td>
+</tr>
+<tr>
+<td><strong>CyberArk</strong></td>
+<td>HLA priority (P0-P3), tier (0-3), CPM/PSM approach, admin auth method, MFA type, marketplace availability</td>
+<td>Platform import, safe creation, connector deployment</td>
+</tr>
+<tr>
+<td><strong>Okta/Entra</strong></td>
+<td>Current IdP, signOnMode, SCIM status, migration target, gap analysis, wave assignment</td>
+<td>App migration planning, Entra Enterprise App/App Registration setup</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-foundations-how-the-decision-trees-work" class="report-section" style="display:none">
+<h2>5. How the Decision Trees Work</h2>
+<p>The HTML intake tool automatically derives IAM recommendations based on app owner answers. No IAM knowledge is required from the app owner.</p>
+<h3 id="sailpoint-integration-pattern">SailPoint Integration Pattern</h3>
+<p>The tool asks: "Does the app have an API?" and "Can the app export a list of users?"</p>
+<table>
+<thead><tr>
+<th>API?</th>
+<th>Write?</th>
+<th>CSV Export?</th>
+<th>Result</th>
+</tr></thead><tbody>
+<tr>
+<td>Yes</td>
+<td>Yes</td>
+<td>--</td>
+<td>Pattern 3: Web Services Connector</td>
+</tr>
+<tr>
+<td>Yes</td>
+<td>No</td>
+<td>--</td>
+<td>Pattern 4: Governance-Only</td>
+</tr>
+<tr>
+<td>No</td>
+<td>--</td>
+<td>Yes</td>
+<td>Pattern 2: Flat File / CSV</td>
+</tr>
+<tr>
+<td>No</td>
+<td>--</td>
+<td>No</td>
+<td>Pattern 4: Governance-Only (custom)</td>
+</tr>
+</tbody></table>
+<p>If a known app is selected from the catalog (e.g., ServiceNow), the tool auto-assigns Pattern 1 (Direct Connector) because a native SailPoint connector exists.</p>
+<h3 id="sailpoint-file-delivery-pattern-2-only">SailPoint File Delivery (Pattern 2 only)</h3>
+<table>
+<thead><tr>
+<th>Has API?</th>
+<th>Delivery Method</th>
+<th>Result</th>
+</tr></thead><tbody>
+<tr>
+<td>Yes (REST/SOAP)</td>
+<td>Any</td>
+<td>Pattern A: MuleSoft API Integration</td>
+</tr>
+<tr>
+<td>Yes</td>
+<td>SFTP/Network</td>
+<td>Pattern C: MuleSoft + GoAnywhere Combined</td>
+</tr>
+<tr>
+<td>No</td>
+<td>SFTP/Network</td>
+<td>Pattern B: GoAnywhere MFT</td>
+</tr>
+<tr>
+<td>No</td>
+<td>Database query</td>
+<td>Pattern D: Database Direct Export</td>
+</tr>
+<tr>
+<td>No</td>
+<td>Manual only</td>
+<td>Pattern E: Manual Fallback</td>
+</tr>
+<tr>
+<td>--</td>
+<td>Mainframe</td>
+<td>Pattern F: Mainframe (JCL/REXX)</td>
+</tr>
+</tbody></table>
+<h3 id="cyberark-hla-classification">CyberArk HLA Classification</h3>
+<p>Six yes/no questions about the privileged account produce a score (0-6):</p>
+<table>
+<thead><tr>
+<th>Score</th>
+<th>Priority</th>
+<th>Tier</th>
+<th>Meaning</th>
+</tr></thead><tbody>
+<tr>
+<td>5-6 or manages infrastructure</td>
+<td>P0</td>
+<td>0</td>
+<td>Control plane -- immediate onboarding</td>
+</tr>
+<tr>
+<td>3-4</td>
+<td>P1</td>
+<td>1</td>
+<td>Server/app admin -- near-term</td>
+</tr>
+<tr>
+<td>2</td>
+<td>P2</td>
+<td>2</td>
+<td>Limited scope -- standard timeline</td>
+</tr>
+<tr>
+<td>0-1</td>
+<td>P3</td>
+<td>3</td>
+<td>Low risk -- planned</td>
+</tr>
+</tbody></table>
+<h3 id="okta-to-entra-migration">Okta-to-Entra Migration</h3>
+<table>
+<thead><tr>
+<th>Okta signOnMode</th>
+<th>Entra Equivalent</th>
+<th>Typical Gaps</th>
+</tr></thead><tbody>
+<tr>
+<td>SAML 2.0</td>
+<td>Enterprise Application (SAML SSO)</td>
+<td>Conditional Access rebuild, per-app email domain</td>
+</tr>
+<tr>
+<td>OIDC</td>
+<td>App Registration (OIDC)</td>
+<td>Redirect URI re-registration, token policies</td>
+</tr>
+<tr>
+<td>SWA</td>
+<td>Enterprise App (Password-based SSO)</td>
+<td>Different field capture, browser extension needed</td>
+</tr>
+<tr>
+<td>Bookmark</td>
+<td>MyApps linked app</td>
+<td>Minimal -- recreate link</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-foundations-known-app-catalog" class="report-section" style="display:none">
+<h2>6. Known App Catalog</h2>
+<p>The HTML intake tool includes 15 pre-configured applications. When an app owner selects one, wizard fields auto-populate with known answers:</p>
+<table>
+<thead><tr>
+<th>Application</th>
+<th>SailPoint Pattern</th>
+<th>CyberArk Marketplace</th>
+<th>Okta OIN</th>
+</tr></thead><tbody>
+<tr>
+<td>ServiceNow</td>
+<td>1 (Direct Connector)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Salesforce</td>
+<td>1 (Direct Connector)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>AWS IAM</td>
+<td>1 (Direct Connector)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Microsoft Entra ID</td>
+<td>1 (Direct Connector)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>GitHub Enterprise</td>
+<td>3 (Web Services)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Workday</td>
+<td>1 (Direct Connector)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Splunk</td>
+<td>3 (Web Services)</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>PagerDuty</td>
+<td>3 (Web Services)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>SAP ECC</td>
+<td>1 (VA-Based)</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Oracle EBS</td>
+<td>1 (VA-Based)</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Active Directory</td>
+<td>1 (VA-Based)</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Jira / Confluence</td>
+<td>3 (Web Services)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Slack Enterprise</td>
+<td>3 (Web Services)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Box</td>
+<td>3 (Web Services)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>CrowdStrike</td>
+<td>4 (Governance-Only)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody></table>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> If your application is not in the catalog, the wizard still works -- you just answer each question manually instead of having fields pre-filled.</p></div>
+</div>
+<div id="section-foundations-csv-output-schemas" class="report-section" style="display:none">
+<h2>7. CSV Output Schemas</h2>
+<h3 id="sailpoint-onboarding-csv-24-columns">sailpoint-onboarding.csv (24 columns)</h3>
+<p>Core fields: <code>appName</code>, <code>appUrl</code>, <code>deploymentType</code>, <code>iscIntegrationPattern</code>, <code>patternConfidence</code>, <code>fileDeliveryPattern</code>, <code>nativeConnectorAvailable</code>, <code>hasApi</code>, <code>apiType</code>, <code>apiSupportsWrite</code>, <code>canExportCsv</code>, <code>csvDeliveryMethod</code>, <code>estimatedAccountCount</code>, <code>rbacRolesIdentified</code>, <code>roleCount</code>, <code>dataDeliveryScheduleCapable</code>, <code>hasAdIntegration</code></p>
+<p>v2 fields: <code>v2AccountTypeAvailable</code>, <code>v2CreatedDateAvailable</code>, <code>v2LastLoginAvailable</code>, <code>v2EntitlementOwnerAvailable</code>, <code>v2EntitlementTypeAvailable</code>, <code>v2EntitlementRiskLevelAvailable</code></p>
+<h3 id="cyberark-onboarding-csv-17-columns">cyberark-onboarding.csv (17 columns)</h3>
+<p><code>appName</code>, <code>appUrl</code>, <code>hlaPriority</code>, <code>tier</code>, <code>hlaScore</code>, <code>accountTypes</code>, <code>adminCount</code>, <code>authMethod</code>, <code>mfaType</code>, <code>canChangePasswordViaApi</code>, <code>cpmApproach</code>, <code>adminAccessMethod</code>, <code>psmApproach</code>, <code>marketplaceConnectorAvailable</code>, <code>estimatedEffortDays</code>, <code>platformCategory</code>, <code>notes</code></p>
+<h3 id="okta-entra-migration-csv-12-columns">okta-entra-migration.csv (12 columns)</h3>
+<p><code>appName</code>, <code>appUrl</code>, <code>currentIdp</code>, <code>signOnMode</code>, <code>hasScimProvisioning</code>, <code>oktaAppLabel</code>, <code>migrationTarget</code>, <code>entraEquivalentConfig</code>, <code>knownGaps</code>, <code>gapCount</code>, <code>recommendedMigrationWave</code>, <code>notes</code></p>
+<h3 id="app-inventory-master-csv">app-inventory-master.csv</h3>
+<p>Unified denormalized view combining all product-specific columns with shared application identity fields. Each product's columns are prefixed (<code>sp_</code>, <code>ca_</code>, <code>okta_</code>, <code>login_</code>).</p>
+</div>
+<div id="section-foundations-data-persistence" class="report-section" style="display:none">
+<h2>8. Data Persistence</h2>
+<h3 id="html-intake-tool">HTML Intake Tool</h3>
+<p>Data is stored in the browser's <code>localStorage</code>. This means:</p>
+<ul><li>Data survives page refreshes and browser restarts</li><li>Data is per-browser, per-device (not synced)</li><li>Clearing browser data erases stored sessions</li><li>localStorage has a 5 MB limit (supports ~50 applications)</li></ul>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Important:</strong> Always export your data (CSV or JSON) before clearing browser data. The "Reset" button in the header clears all stored data permanently.</p></div>
+<h3 id="powershell-consolidator">PowerShell Consolidator</h3>
+<p>The consolidator is stateless -- it reads Excel files, processes them, and writes output files. No persistent state is maintained between runs.</p>
+<p>The <code>-SaveSchema</code> flag saves the detected column mapping for reuse. The <code>-SchemaPath</code> flag loads a previously saved schema to skip auto-detection on subsequent runs.</p>
+</div>
+<div id="section-foundations-security-considerations" class="report-section" style="display:none">
+<h2>9. Security Considerations</h2>
+<ul><li>The HTML intake tool runs entirely in the browser. No data is sent to any server.</li><li>CSV exports may contain application URLs, owner names, and admin account details. Handle as <strong>Internal/Confidential</strong>.</li><li>The login page bookmarklet captures page metadata (form fields, URL parameters) but not passwords or session tokens.</li><li>The PowerShell consolidator reads from and writes to the local file system only.</li><li>Excel files containing questionnaire data should be stored on access-controlled shares.</li></ul>
+</div>
+<div id="section-foundations-getting-help" class="report-section" style="display:none">
+<h2>10. Getting Help</h2>
+<table>
+<thead><tr>
+<th>Resource</th>
+<th>Location</th>
+</tr></thead><tbody>
+<tr>
+<td>This playbook</td>
+<td><code>docs/USER-GUIDE.html</code></td>
+</tr>
+<tr>
+<td>HTML tool source</td>
+<td><code>iam-intake-tool.html</code> (view source for implementation details)</td>
+</tr>
+<tr>
+<td>PowerShell script</td>
+<td><code>Merge-IAMIntakeData.ps1</code> (run with <code>-Help</code> for parameter documentation)</td>
+</tr>
+<tr>
+<td>SailPoint patterns</td>
+<td><code>SailPoint/docs/connectors/INTEGRATION_PATTERNS.md</code></td>
+</tr>
+<tr>
+<td>CyberArk HLA guide</td>
+<td><code>CyberARK/docs/cyberark-hla-account-classification.md</code></td>
+</tr>
+<tr>
+<td>Okta migration toolkit</td>
+<td><code>Okta/okta-app-migration/</code></td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-html-intake-tool-overview" class="report-section" style="display:none">
+<h2>HTML Intake Tool &mdash; Overview</h2>
+<h2 id="html-intake-tool-user-guide">HTML Intake Tool -- User Guide</h2>
+</div>
+<div id="section-html-intake-tool-overview" class="report-section" style="display:none">
+<h2>Overview</h2>
+<p>The IAM Application Integration Intake tool (<code>iam-intake-tool.html</code>) is a browser-based wizard that guides application owners through a structured questionnaire. It collects the information needed for SailPoint governance, CyberArk privileged access management, and Okta/Entra ID identity federation -- all without requiring the app owner to know anything about these IAM products.</p>
+<p>The tool translates plain-language answers ("When I log in, I get redirected to another page") into IAM-actionable data ("SAML SSO via federated IdP").</p>
+</div>
+<div id="section-html-intake-tool-opening-the-tool" class="report-section" style="display:none">
+<h2>1. Opening the Tool</h2>
+<p>Open <code>iam-intake-tool.html</code> in any modern web browser. No internet connection is required.</p>
+<p>The interface has three main areas:</p>
+<ul><li><strong>Header bar</strong> -- Title, Known App Catalog button, Add Application button, Reset button</li><li><strong>Wizard panel</strong> (left) -- Step-by-step questionnaire with navigation pills at the top</li><li><strong>Summary panel</strong> (right) -- Live integration map that updates as you answer questions</li></ul>
+</div>
+<div id="section-html-intake-tool-starting-a-new-application" class="report-section" style="display:none">
+<h2>2. Starting a New Application</h2>
+<h3 id="option-a-select-from-known-app-catalog">Option A: Select from Known App Catalog</h3>
+<ol><li>Click <strong>Known App Catalog</strong> in the header</li><li>Search or browse the 15 pre-loaded applications</li><li>Click an application, then click <strong>Apply Selection</strong></li><li>Fields across all wizard steps are pre-populated with known answers</li><li>Review and adjust any values that differ for your specific environment</li></ol>
+<h3 id="option-b-manual-entry">Option B: Manual Entry</h3>
+<p>Simply start typing in Step 1. Every field is editable.</p>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> Even if your app is not in the catalog, starting with a similar app and modifying values can save time.</p></div>
+</div>
+<div id="section-html-intake-tool-wizard-step-1-application-identity" class="report-section" style="display:none">
+<h2>3. Wizard Step 1: Application Identity</h2>
+<p>Provide basic information about your application:</p>
+<table>
+<thead><tr>
+<th>Field</th>
+<th>Required</th>
+<th>Example</th>
+</tr></thead><tbody>
+<tr>
+<td>Application Name</td>
+<td>Yes</td>
+<td>ServiceNow, PEP+, Custom HR Portal</td>
+</tr>
+<tr>
+<td>Application URL</td>
+<td>Yes</td>
+<td>https://acme.service-now.com</td>
+</tr>
+<tr>
+<td>Vendor / Publisher</td>
+<td>No</td>
+<td>ServiceNow, Fiserv, In-house</td>
+</tr>
+<tr>
+<td>Deployment Type</td>
+<td>Yes</td>
+<td>SaaS, On-premises, IaaS-hosted, Hybrid</td>
+</tr>
+<tr>
+<td>Estimated User Count</td>
+<td>No</td>
+<td>Under 50, 50-500, 500-5000, 5000+</td>
+</tr>
+<tr>
+<td>Application Owner (Name)</td>
+<td>No</td>
+<td>Jane Smith</td>
+</tr>
+<tr>
+<td>Application Owner (Email)</td>
+<td>No</td>
+<td>jane.smith@company.com</td>
+</tr>
+<tr>
+<td>Brief Description</td>
+<td>No</td>
+<td>Free-form description of the app's purpose</td>
+</tr>
+</tbody></table>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Note:</strong> The application name is used as the merge key when combining data from multiple sources. Use the same name consistently.</p></div>
+</div>
+<div id="section-html-intake-tool-wizard-step-2-how-users-log-in" class="report-section" style="display:none">
+<h2>4. Wizard Step 2: How Users Log In</h2>
+<p>This step determines the authentication method without requiring you to know protocols like SAML or OIDC.</p>
+<p><strong>Primary question:</strong> "When a user goes to log into your app, what happens?"</p>
+<table>
+<thead><tr>
+<th>Answer</th>
+<th>What it means (behind the scenes)</th>
+</tr></thead><tbody>
+<tr>
+<td>Direct login page</td>
+<td>Local authentication -- the app manages its own passwords</td>
+</tr>
+<tr>
+<td>Redirected to company login</td>
+<td>SSO/federated -- a separate identity provider handles login</td>
+</tr>
+<tr>
+<td>Automatic sign-in from desktop</td>
+<td>Integrated Windows Authentication (IWA/Kerberos)</td>
+</tr>
+<tr>
+<td>Multiple methods</td>
+<td>Mixed authentication -- both local and SSO may be available</td>
+</tr>
+<tr>
+<td>Not sure</td>
+<td>Triggers a simpler follow-up question (see below)</td>
+</tr>
+</tbody></table>
+<h3 id="not-sure-follow-up">"Not Sure" Follow-Up</h3>
+<p>If you select "Not sure," the tool rephrases the question:</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>"When you go to your app's website, what do you see first?"</p>
+<ul><li>A username and password form on the app's own page</li><li>I get sent to a different website to sign in</li><li>I am already logged in when I open the page</li></ul></div>
+<h3 id="identity-provider-detection">Identity Provider Detection</h3>
+<p>If SSO is detected, the tool asks which provider handles the login (Okta, Microsoft Entra ID, Other, Not sure).</p>
+<h3 id="login-page-analysis-optional">Login Page Analysis (Optional)</h3>
+<p>Click <strong>Analyze Login Page</strong> to open the analysis modal. Two methods:</p>
+<p><strong>Bookmarklet method:</strong></p>
+<ol><li>Drag the "IAM Login Analyzer" button to your browser's bookmark bar</li><li>Navigate to your application's login page</li><li>Click the bookmarklet -- a panel appears with captured JSON</li><li>Copy the JSON and paste it into the tool</li><li>Click <strong>Parse Bookmarklet Data</strong></li></ol>
+<p><strong>Paste Source method:</strong></p>
+<ol><li>Navigate to your application's login page</li><li>Right-click, select "View Page Source"</li><li>Select all (Ctrl+A / Cmd+A), copy</li><li>Paste into the "Paste page source code" area</li><li>Click <strong>Analyze Source Code</strong></li></ol>
+<p>Both methods detect:</p>
+<ul><li>Form field names and types (username, password, OTP fields)</li><li>SAML indicators (SAMLRequest parameters, RelayState)</li><li>OIDC indicators (client_id, response_type parameters)</li><li>Identity provider (Okta, Entra ID, Auth0, Ping hostname patterns)</li><li>MFA indicators (TOTP input fields, authenticator links)</li></ul>
+<p>Click <strong>Apply to Wizard</strong> to auto-populate authentication fields.</p>
+<div class="callout callout-danger"><div class="callout-label">Security</div><p><strong>Note:</strong> Some sites block bookmarklets via Content Security Policy (CSP). Use the paste-source method as a fallback.</p></div>
+<h3 id="mfa-configuration">MFA Configuration</h3>
+<p>If MFA is enabled, select all applicable types:</p>
+<ul><li>One-time code from an app (Google/Microsoft Authenticator)</li><li>Push notification</li><li>SMS text message</li><li>Hardware token (YubiKey, RSA)</li><li>Email code</li><li>Certificate / smart card</li></ul>
+</div>
+<div id="section-html-intake-tool-wizard-step-3-access-permissions" class="report-section" style="display:none">
+<h2>5. Wizard Step 3: Access &amp; Permissions</h2>
+<h3 id="roles">Roles</h3>
+<p>If the app has different roles, add them using the dynamic list:</p>
+<table>
+<thead><tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr></thead><tbody>
+<tr>
+<td>Role name</td>
+<td>The technical or common name (e.g., "admin", "itil", "ReadOnly")</td>
+</tr>
+<tr>
+<td>Description</td>
+<td>What this role allows (optional but helpful)</td>
+</tr>
+<tr>
+<td>Risk level</td>
+<td>Low, Medium, High, Critical -- your best assessment</td>
+</tr>
+</tbody></table>
+<p>Click <strong>+ Add Role</strong> to add more. Click the X to remove.</p>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> If you selected a known app, default roles are pre-populated. Modify or remove any that don't apply to your instance.</p></div>
+<h3 id="admin-privileged-accounts">Admin / Privileged Accounts</h3>
+<p>The "Not sure" response triggers a simpler question:</p>
+<div class="callout callout-danger"><div class="callout-label">Security</div><p>"Is there at least one account that can create other users, change security settings, or view all data?"</p></div>
+<p>If yes, specify:</p>
+<ul><li>How many admin accounts exist</li><li>Account types (human admin, service account, API/integration, shared)</li><li>How admins access the app (browser, RDP, SSH, thick client)</li></ul>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Important:</strong> This section determines whether CyberArk Step 5 appears. If you answer "No" or skip this, the CyberArk section is hidden.</p></div>
+</div>
+<div id="section-html-intake-tool-wizard-step-4-sailpoint-governance" class="report-section" style="display:none">
+<h2>6. Wizard Step 4: SailPoint Governance</h2>
+<p>This step determines how SailPoint will connect to your application.</p>
+<h3 id="api-questions">API Questions</h3>
+<p>"Does the app have an API?" -- If unsure, the tool rephrases:</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>"Does your app have developer documentation or a way to manage users programmatically?"</p></div>
+<p>If yes, follow-up questions ask about the API type (REST, SOAP, GraphQL) and whether it supports creating/updating/deleting users.</p>
+<h3 id="csv-export-questions">CSV Export Questions</h3>
+<p>"Can the app export a list of all users and their roles?" -- If unsure:</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>"Can an admin go to a user management page and download a list of all users?"</p></div>
+<p>If yes, the tool asks about the export method (built-in button, database query, manual copy) and whether automatic file delivery is possible (SFTP, network share, API, manual only).</p>
+<h3 id="v2-template-fields">v2 Template Fields</h3>
+<p>A checklist asks whether your app can provide enhanced data fields:</p>
+<ul><li>Account Type (standard, admin, service, shared)</li><li>Creation Date</li><li>Last Login</li><li>Entitlement Owner</li><li>Entitlement Type (role, group, permission, license)</li><li>Entitlement Risk Level (low, medium, high, critical)</li></ul>
+<p>These are optional enhancements for SailPoint v2 CSV templates. Check what your app can provide.</p>
+<h3 id="auto-derived-result">Auto-Derived Result</h3>
+<p>After answering, the tool displays the recommended SailPoint integration pattern and file delivery method with a confidence level (high/medium/low).</p>
+</div>
+<div id="section-html-intake-tool-wizard-step-5-cyberark-privileged-access" class="report-section" style="display:none">
+<h2>7. Wizard Step 5: CyberArk Privileged Access</h2>
+<p>This step appears only if admin/privileged accounts were identified in Step 3.</p>
+<h3 id="hla-checklist-6-questions">HLA Checklist (6 Questions)</h3>
+<p>Click Yes or No for each:</p>
+<table>
+<thead><tr>
+<th>Question</th>
+<th>Scoring Impact</th>
+</tr></thead><tbody>
+<tr>
+<td>Can this account modify security settings or audit logs?</td>
+<td>+1 toward higher priority</td>
+</tr>
+<tr>
+<td>Can this account create, delete, or modify other users?</td>
+<td>+1</td>
+</tr>
+<tr>
+<td>Does this account have access to sensitive data?</td>
+<td>+1</td>
+</tr>
+<tr>
+<td>Is this a service account for system-to-system integration?</td>
+<td>+1</td>
+</tr>
+<tr>
+<td>Could compromise affect more than 100 users?</td>
+<td>+1</td>
+</tr>
+<tr>
+<td>Does this account manage infrastructure?</td>
+<td>+1, auto-promotes to P0</td>
+</tr>
+</tbody></table>
+<h3 id="admin-authentication">Admin Authentication</h3>
+<p>Select how admins authenticate: local password, API token, OAuth, certificate, SSH key, AD/domain account, or SSO pass-through.</p>
+<h3 id="password-change-via-api">Password Change via API</h3>
+<p>"Can the admin password be changed via API?" -- If unsure:</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>"Is there a way to reset the admin password without logging into the app's UI manually?"</p></div>
+<p>This determines whether CyberArk CPM (Central Policy Manager) can automate password rotation.</p>
+<h3 id="auto-derived-result">Auto-Derived Result</h3>
+<p>The tool displays:</p>
+<ul><li><strong>HLA Priority</strong> (P0-P3) and <strong>Tier</strong> (0-3) with color-coded badge</li><li><strong>HLA Score</strong> (0-6)</li><li><strong>CPM Approach</strong> (Built-in Marketplace, REST API Framework, Manual, Vault-Only)</li><li><strong>PSM Approach</strong> (Built-in RDP/SSH, WebFormFields, AutoIt custom, N/A)</li><li><strong>Estimated Effort</strong> (days)</li><li><strong>Marketplace Connector</strong> indicator (if known app)</li></ul>
+</div>
+<div id="section-html-intake-tool-wizard-step-6-okta-entra-id" class="report-section" style="display:none">
+<h2>8. Wizard Step 6: Okta / Entra ID</h2>
+<p>This step appears only if SSO was detected in Step 2 or if an identity provider was identified.</p>
+<h3 id="okta-specific-questions">Okta-Specific Questions</h3>
+<p>If the current IdP is Okta:</p>
+<ul><li><strong>Sign-On Mode</strong>: SAML, OIDC, SWA, Bookmark, or Not sure</li><li><strong>SCIM Provisioning</strong>: Whether automated user provisioning is configured</li><li><strong>Okta App Label</strong>: The display name in Okta (optional)</li></ul>
+<p>If "Not sure" on sign-on mode, the tool asks:</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>"When you click the app in your Okta dashboard, what happens?"</p>
+<ul><li>I'm automatically signed into the app (SAML/OIDC)</li><li>Okta fills in a username and password for me (SWA)</li><li>It just opens a web link (Bookmark)</li></ul></div>
+<h3 id="migration-target">Migration Target</h3>
+<p>Select the planned direction: Staying in Okta, Moving to Entra ID, Both (dual IdP), or Not decided.</p>
+<h3 id="auto-derived-gaps">Auto-Derived Gaps</h3>
+<p>If migrating to Entra ID, the tool displays known migration gaps as amber callout boxes. These are informational -- the IAM team will handle the technical migration.</p>
+</div>
+<div id="section-html-intake-tool-wizard-step-7-review-export" class="report-section" style="display:none">
+<h2>9. Wizard Step 7: Review &amp; Export</h2>
+<p>The final step shows:</p>
+<ol><li><strong>Validation messages</strong> -- Missing required fields (red) and incomplete optional sections (amber)</li><li><strong>Full summary</strong> -- All entered data organized by section</li><li><strong>Additional notes</strong> -- Free-form textarea for anything else the IAM team should know</li></ol>
+<h3 id="export-options">Export Options</h3>
+<table>
+<thead><tr>
+<th>Button</th>
+<th>Output</th>
+</tr></thead><tbody>
+<tr>
+<td>SailPoint CSV</td>
+<td><code>sailpoint-onboarding-YYYY-MM-DD.csv</code></td>
+</tr>
+<tr>
+<td>CyberArk CSV</td>
+<td><code>cyberark-onboarding-YYYY-MM-DD.csv</code></td>
+</tr>
+<tr>
+<td>Okta/Entra CSV</td>
+<td><code>okta-entra-migration-YYYY-MM-DD.csv</code></td>
+</tr>
+<tr>
+<td>Login Analysis CSV</td>
+<td><code>login-analysis-YYYY-MM-DD.csv</code></td>
+</tr>
+<tr>
+<td>Master CSV</td>
+<td><code>app-inventory-master-YYYY-MM-DD.csv</code> (all data combined)</td>
+</tr>
+<tr>
+<td>Export JSON</td>
+<td><code>iam-intake-data-YYYY-MM-DD.json</code> (full data model)</td>
+</tr>
+<tr>
+<td>Export All</td>
+<td>Downloads all 5 CSVs + JSON simultaneously</td>
+</tr>
+<tr>
+<td>Print</td>
+<td>Browser print dialog (optimized print stylesheet)</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-html-intake-tool-portfolio-mode-multiple-applications" class="report-section" style="display:none">
+<h2>10. Portfolio Mode (Multiple Applications)</h2>
+<p>App owners who manage multiple applications can add them all in a single session:</p>
+<ol><li>Complete the first application through the wizard</li><li>Click <strong>+ Add Application</strong> in the header (or on the Review step)</li><li>A new blank application is created with its own tab in the summary panel</li><li>Switch between applications by clicking tabs</li><li>All applications are included in CSV exports (one row per app)</li></ol>
+<p>To remove an application, click the X on its tab and confirm.</p>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Important:</strong> All applications share a single localStorage session. Exporting downloads data for ALL applications in the current session.</p></div>
+</div>
+<div id="section-html-intake-tool-session-recovery" class="report-section" style="display:none">
+<h2>11. Session Recovery</h2>
+<p>If you close the browser or navigate away, your data is preserved in localStorage. When you reopen the file, the tool restores:</p>
+<ul><li>All application data</li><li>Current wizard step position</li><li>Summary panel state</li></ul>
+<p>Auto-save runs every 30 seconds and on every step transition.</p>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Warning:</strong> Using "Reset" in the header permanently erases all stored data. Always export first.</p></div>
+</div>
+<div id="section-html-intake-tool-troubleshooting" class="report-section" style="display:none">
+<h2>12. Troubleshooting</h2>
+<table>
+<thead><tr>
+<th>Issue</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr></thead><tbody>
+<tr>
+<td>Bookmarklet does not work</td>
+<td>Site blocks bookmarklets via CSP</td>
+<td>Use the paste-source method instead</td>
+</tr>
+<tr>
+<td>Data not saved after refresh</td>
+<td>Private/incognito mode</td>
+<td>Use a normal browser window; private mode disables localStorage</td>
+</tr>
+<tr>
+<td>CSV opens as single column in Excel</td>
+<td>Excel defaulting to non-comma delimiter</td>
+<td>Use "Data &gt; From Text/CSV" import with comma delimiter, or change regional settings</td>
+</tr>
+<tr>
+<td>No CyberArk step appears</td>
+<td>"Privileged accounts" not answered Yes in Step 3</td>
+<td>Go back to Step 3, answer "Yes" to the admin accounts question</td>
+</tr>
+<tr>
+<td>No Okta step appears</td>
+<td>Login method not detected as SSO</td>
+<td>Go to Step 2, select "Redirected to company login" or use the login analyzer</td>
+</tr>
+<tr>
+<td>Page loads slowly</td>
+<td>50+ applications in localStorage</td>
+<td>Export data, then reset to start fresh</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-powershell-consolidator-overview" class="report-section" style="display:none">
+<h2>PowerShell Consolidator &mdash; Overview</h2>
+<h2 id="powershell-consolidator-reference-guide">PowerShell Consolidator -- Reference Guide</h2>
+</div>
+<div id="section-powershell-consolidator-overview" class="report-section" style="display:none">
+<h2>Overview</h2>
+<p><code>Merge-IAMIntakeData.ps1</code> reads existing Excel and Word questionnaires filled out by application teams, adaptively detects their format, maps fields to canonical names using fuzzy matching, normalizes values, and produces a consolidated XLSX workbook, interactive HTML browser, JSON payload, and per-product CSVs.</p>
+<p>The script handles six format variants without requiring any configuration:</p>
+<table>
+<thead><tr>
+<th>Format</th>
+<th>Detected By</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Structured</strong></td>
+<td>Column vocabulary matching (<code>$script:StructuredHeaderRoles</code>)</td>
+<td>Formal templates with banner rows, Q&amp;A blocks, contacts, account tables. Answer taken from Responses/Answer column; guidance columns ignored.</td>
+</tr>
+<tr>
+<td><strong>List</strong></td>
+<td>Sheet name matches list patterns (roles, groups, entitlements)</td>
+<td>Rows aggregate into app-level fields (<code>sp_rbacRoles</code>, <code>adGroups</code>, counts)</td>
+</tr>
+<tr>
+<td><strong>Tabular</strong></td>
+<td>3+ uniformly filled columns, multiple data rows</td>
+<td>One application record per row</td>
+</tr>
+<tr>
+<td><strong>KeyValue</strong></td>
+<td>2-3 columns, question-like text in column A</td>
+<td>One record per sheet</td>
+</tr>
+<tr>
+<td><strong>MultiSection</strong></td>
+<td>Key-value plus section markers (===, ---, all-caps)</td>
+<td>Section-prefixed keys</td>
+</tr>
+<tr>
+<td><strong>Docx</strong></td>
+<td><code>.docx</code> file extension</td>
+<td>Tables extracted from <code>word/document.xml</code>: entitlement-schema tables become groups/roles, 2-column tables become key/value pairs</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-powershell-consolidator-quick-start" class="report-section" style="display:none">
+<h2>1. Quick Start</h2>
+<pre><code># First run -- auto-detect everything, save schema for reuse
+.\Merge-IAMIntakeData.ps1 -Path \\server\IAM-Questionnaires -SaveSchema
+
+# Subsequent runs -- reuse learned schema
+.\Merge-IAMIntakeData.ps1 -Path \\server\IAM-Questionnaires -SchemaPath .\schema.json</code></pre>
+<p>The script always produces the XLSX workbook, HTML browser, JSON payload, and all CSVs. No flags needed.</p>
+</div>
+<div id="section-powershell-consolidator-parameters" class="report-section" style="display:none">
+<h2>2. Parameters</h2>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Path</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>--</td>
+<td>Directory containing .xlsx/.docx files, or a single file path</td>
+</tr>
+<tr>
+<td><code>-OutputPath</code></td>
+<td>string</td>
+<td>No</td>
+<td><code>.\IAM-Intake-Consolidated</code></td>
+<td>Directory for output files (created if missing)</td>
+</tr>
+<tr>
+<td><code>-Product</code></td>
+<td>string</td>
+<td>No</td>
+<td><code>All</code></td>
+<td>Filter per-product CSVs: <code>All</code>, <code>SailPoint</code>, <code>CyberArk</code>, <code>OktaEntra</code></td>
+</tr>
+<tr>
+<td><code>-ShowUnmapped</code></td>
+<td>switch</td>
+<td>No</td>
+<td>--</td>
+<td>Display unmapped field names in console output</td>
+</tr>
+<tr>
+<td><code>-SchemaPath</code></td>
+<td>string</td>
+<td>No</td>
+<td>--</td>
+<td>Path to a previously saved schema JSON for reuse</td>
+</tr>
+<tr>
+<td><code>-SaveSchema</code></td>
+<td>switch</td>
+<td>No</td>
+<td>--</td>
+<td>Save detected column mappings as a reusable schema JSON</td>
+</tr>
+<tr>
+<td><code>-DryRun</code></td>
+<td>switch</td>
+<td>No</td>
+<td>--</td>
+<td>Analyze files and show results without writing output</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Note:</strong> <code>-IncludeHtml</code> is accepted for backward compatibility but is no longer needed -- the HTML browser is always generated.</p></div>
+</div>
+<div id="section-powershell-consolidator-adaptive-format-detection" class="report-section" style="display:none">
+<h2>3. Adaptive Format Detection</h2>
+<h3 id="detection-priority">Detection Priority</h3>
+<p>The script evaluates each file/sheet in this order:</p>
+<ol><li><strong>Docx check</strong>: If the file extension is <code>.docx</code>, bypass all sheet logic -- parse tables from <code>word/document.xml</code></li><li><strong>List sheet check</strong>: If the sheet name matches a list pattern (<code>role</code>, <code>rbac</code>, <code>group</code>, <code>entitlement</code>, <code>permission</code>, <code>membership</code>), treat as a list of roles/groups and aggregate</li><li><strong>Structured check</strong>: Re-import the sheet with <code>-NoHeader</code>, scan rows against the structured header vocabulary. If any row yields 2+ vocabulary hits with a <code>key</code> or <code>acctName</code> role, classify as Structured</li><li><strong>Fingerprint scoring</strong>: For everything else, score as Tabular vs KeyValue vs MultiSection based on column fill rates and text patterns</li></ol>
+<h3 id="structured-format-templates">Structured Format (Templates)</h3>
+<p>The structured parser handles formal questionnaire templates that have:</p>
+<ul><li><strong>Banner rows</strong>: Section headers in all-caps or styled text</li><li><strong>Q&amp;A blocks</strong>: Question in one column, answer in a Responses/Answer column, guidance columns (Description, Options, Instructions) ignored</li><li><strong>Contact blocks</strong>: Name(s) and Email(s) columns</li><li><strong>Account tables</strong>: Rows with Account Name, Account Type, Interactive/Service classification. Rows marked "EXAMPLE ENTRY" are skipped.</li><li><strong>Unknown sub-tables</strong>: Preserved as <code>_detail_*</code> JSON blobs</li></ul>
+<p>The parser discovers column roles from header captions using <code>$script:StructuredHeaderRoles</code>, not fixed column positions. This makes it layout-agnostic -- columns can be in any order.</p>
+<h3 id="docx-format-word-documents">Docx Format (Word Documents)</h3>
+<p>Word .docx files are opened as ZIP archives and the <code>word/document.xml</code> is parsed. Three types of tables are recognized:</p>
+<table>
+<thead><tr>
+<th>Table Type</th>
+<th>Detection</th>
+<th>Extraction</th>
+</tr></thead><tbody>
+<tr>
+<td>Entitlement schema</td>
+<td>First row contains "entitlement type"</td>
+<td>Rows classified as groups or roles based on type column</td>
+</tr>
+<tr>
+<td>Two-column KV</td>
+<td>80%+ of rows have exactly 2 cells</td>
+<td>Key-value pairs added directly to record</td>
+</tr>
+<tr>
+<td>Multi-column</td>
+<td>Everything else</td>
+<td>Preserved as <code>_detail_*</code> JSON</td>
+</tr>
+</tbody></table>
+<p>No Word installation is required -- uses <code>System.IO.Compression.ZipFile</code> (built into .NET).</p>
+<h3 id="list-sheets-roles-groups">List Sheets (Roles/Groups)</h3>
+<p>Sheets named with list patterns (case-insensitive: role, rbac, group, entitlement, permission, membership) are aggregated:</p>
+<ul><li><strong>Group sheets</strong> (name matches <code>group</code> or <code>membership</code>): Values become <code>adGroups</code> (semicolon-joined) and <code>adGroupCount</code></li><li><strong>Role sheets</strong> (everything else): Values become <code>sp_rbacRoles</code> (semicolon-joined) and <code>sp_roleCount</code></li><li>Full per-row detail is preserved as <code>_detail_*</code> JSON</li></ul>
+<p>List sheet records inherit the app name from other sheets in the same workbook.</p>
+</div>
+<div id="section-powershell-consolidator-app-identity-and-merge" class="report-section" style="display:none">
+<h2>4. App Identity and Merge</h2>
+<h3 id="filename-anchored-identity">Filename-Anchored Identity</h3>
+<p>Files named <code>&lt;AppName&gt;_&lt;Template&gt;.xlsx</code> (e.g., <code>Versify_CyberArk Questionnaire.xlsx</code>) carry the app identity in the filename. The script extracts the leading app name token by stripping known template suffixes (questionnaire, cyberark, sailpoint, okta, intake, onboarding).</p>
+<p>The filename anchor <strong>wins over in-sheet names</strong>, which often hold database or instance names rather than the business application name.</p>
+<h3 id="normalized-merge-key">Normalized Merge Key</h3>
+<p>App names are normalized aggressively for merge:</p>
+<ul><li>Parentheticals stripped: <code>ServiceNow (SNOW)</code> -&gt; <code>ServiceNow</code></li><li>Domain suffixes stripped: <code>Salesforce.com</code> -&gt; <code>Salesforce</code></li><li>Company suffixes stripped: <code>Acme Inc</code> -&gt; <code>Acme</code></li><li>Case-insensitive, all non-alphanumeric removed</li></ul>
+<p>Result: <code>"Salesforce.com"</code>, <code>"Salesforce"</code>, and <code>"salesforce"</code> all merge into one record.</p>
+<h3 id="conflict-tracking">Conflict Tracking</h3>
+<p>When two source records disagree on a canonical field, the first value is kept and the disagreement is recorded:</p>
+<ul><li><code>_conflictCount</code>: Number of field-level disagreements</li><li><code>_conflicts</code>: Human-readable summary (e.g., <code>"authMethod: kept 'SAML', ignored 'OIDC' (from cyberark-questionnaire.xlsx)"</code>)</li><li><code>_nameVariants</code>: All raw app name spellings found across sources</li></ul>
+<p>Conflicts appear in the XLSX Conflicts sheet, the JSON <code>conflicts</code> array, and the HTML browser's provenance card.</p>
+</div>
+<div id="section-powershell-consolidator-value-normalization" class="report-section" style="display:none">
+<h2>5. Value Normalization</h2>
+<p>After canonical mapping, values are normalized to consistent forms:</p>
+<table>
+<thead><tr>
+<th>Field Type</th>
+<th>Raw Values</th>
+<th>Normalized</th>
+</tr></thead><tbody>
+<tr>
+<td>Boolean fields</td>
+<td>yes, Y, TRUE, 1, yep, enabled</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Boolean fields</td>
+<td>no, N, FALSE, 0, nope, disabled</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Boolean fields</td>
+<td>unknown, unsure, N/A, TBD, ?</td>
+<td>Unknown</td>
+</tr>
+<tr>
+<td><code>deploymentType</code></td>
+<td>cloud, hosted, cloud-hosted</td>
+<td>SaaS</td>
+</tr>
+<tr>
+<td><code>deploymentType</code></td>
+<td>on-prem, on-premises, self-hosted</td>
+<td>On-Prem</td>
+</tr>
+<tr>
+<td><code>authMethod</code></td>
+<td>saml, saml 2.0, saml2</td>
+<td>SAML</td>
+</tr>
+<tr>
+<td><code>authMethod</code></td>
+<td>oidc, openid connect, oauth</td>
+<td>OIDC</td>
+</tr>
+<tr>
+<td><code>mfaType</code></td>
+<td>totp, authenticator, google auth</td>
+<td>Authenticator App</td>
+</tr>
+<tr>
+<td><code>ca_hlaPriority</code></td>
+<td>p0, critical, tier 0</td>
+<td>P0</td>
+</tr>
+<tr>
+<td><code>okta_signOnMode</code></td>
+<td>saml_2_0, saml 2.0</td>
+<td>SAML 2.0</td>
+</tr>
+</tbody></table>
+<p>Boolean normalization applies to: <code>hasMfa</code>, <code>hasApi</code>, <code>adIntegration</code>, <code>sp_canExportCsv</code>, <code>sp_apiSupportsWrite</code>, <code>ca_canChangePasswordViaApi</code>, <code>ca_marketplace</code>, all <code>ca_modify*/manage*/sensitive*</code> fields, and <code>okta_hasScimProvisioning</code>.</p>
+</div>
+<div id="section-powershell-consolidator-fuzzy-canonical-mapping" class="report-section" style="display:none">
+<h2>6. Fuzzy Canonical Mapping</h2>
+<p>Each column name or question text is matched against ~200 aliases across 50+ canonical fields:</p>
+<ol><li><strong>Exact alias match</strong> = 1.0 score</li><li><strong>Coverage-weighted containment</strong> = 0.85 score (longer, more specific aliases win)</li><li><strong>Word overlap</strong> = Jaccard coefficient</li><li><strong>Partial word match</strong> = 0.7 bonus for prefix matches</li></ol>
+<p>Fields scoring below 0.40 are flagged as unmapped.</p>
+<h3 id="canonical-field-categories">Canonical Field Categories</h3>
+<p><strong>Shared</strong>: <code>appName</code>, <code>appUrl</code>, <code>vendor</code>, <code>deploymentType</code>, <code>estimatedUsers</code>, <code>appOwnerName</code>, <code>appOwnerEmail</code>, <code>authMethod</code>, <code>hasMfa</code>, <code>mfaType</code>, <code>hasApi</code>, <code>adIntegration</code>, <code>description</code></p>
+<p><strong>SailPoint</strong> (prefixed <code>sp_</code>): <code>sp_integrationPattern</code>, <code>sp_connectorType</code>, <code>sp_canExportCsv</code>, <code>sp_csvDeliveryMethod</code>, <code>sp_fileDeliveryMethod</code>, <code>sp_rbacRoles</code>, <code>sp_roleCount</code>, <code>sp_apiType</code>, <code>sp_apiSupportsWrite</code>, <code>sp_v2AccountType</code>, <code>sp_v2LastLogin</code>, <code>sp_v2RiskLevel</code></p>
+<p><strong>CyberArk</strong> (prefixed <code>ca_</code>): <code>ca_hlaPriority</code>, <code>ca_tier</code>, <code>ca_accountTypes</code>, <code>ca_adminCount</code>, <code>ca_adminAuthMethod</code>, <code>ca_adminAccessMethod</code>, <code>ca_canChangePasswordViaApi</code>, <code>ca_adminMfaType</code>, <code>ca_cpmApproach</code>, <code>ca_psmApproach</code>, <code>ca_marketplace</code>, <code>ca_platformCategory</code>, <code>ca_modifySecurity</code>, <code>ca_manageUsers</code>, <code>ca_sensitiveData</code>, <code>ca_impactScope</code>, <code>ca_managesInfra</code></p>
+<p><strong>Okta/Entra</strong> (prefixed <code>okta_</code>): <code>okta_currentIdp</code>, <code>okta_signOnMode</code>, <code>okta_hasScimProvisioning</code>, <code>okta_appLabel</code>, <code>okta_migrationTarget</code>, <code>okta_entraEquivalent</code>, <code>okta_knownGaps</code>, <code>okta_migrationWave</code>, <code>okta_conditionalAccess</code>, <code>okta_groupAssignments</code>, <code>okta_mfaPolicy</code></p>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> To teach the parser a new template vocabulary, extend <code>$script:StructuredHeaderRoles</code> (for column captions) and <code>$script:CanonicalFields</code> (for question text). Longer, more specific aliases always win over generic words.</p></div>
+</div>
+<div id="section-powershell-consolidator-detail-fields-detail" class="report-section" style="display:none">
+<h2>7. Detail Fields (<code>_detail_*</code>)</h2>
+<p>Structured multi-row data that cannot be flattened into a single CSV cell is preserved as compact JSON blobs in <code>_detail_*</code> properties.</p>
+<p>Sources:</p>
+<ul><li><strong>Structured sheets</strong>: Unrecognized sub-tables and account tables</li><li><strong>List sheets</strong>: Full per-row data from role/group lists</li><li><strong>Docx files</strong>: Unknown multi-column tables and entitlement schema tables</li></ul>
+<p>These are consumed by:</p>
+<ul><li><strong>XLSX workbook</strong>: <code>RolesGroups</code> and <code>Accounts</code> sheets flatten the detail JSON into tabular rows</li><li><strong>HTML browser</strong>: Rendered as dynamic tables within each app's section</li><li><strong>JSON payload</strong>: Included in each app's <code>details</code> dictionary</li></ul>
+<p><code>_detail_*</code> fields are excluded from flat CSVs.</p>
+</div>
+<div id="section-powershell-consolidator-output-files" class="report-section" style="display:none">
+<h2>8. Output Files</h2>
+<h3 id="always-generated">Always Generated</h3>
+<pre><code>{OutputPath}/
+  IAM-Intake-Consolidated-&lt;date&gt;.xlsx      -- Multi-sheet workbook (see below)
+  IAM-Intake-Browser-&lt;date&gt;.html           -- Interactive HTML app browser
+  IAM-Intake-Data.json                     -- Stable-name JSON payload
+  IAM-Intake-&lt;date&gt;.json                   -- Date-stamped copy of JSON
+  IAM-Intake-Consolidated-&lt;date&gt;.csv       -- Flat CSV, all apps, all fields
+  IAM-Intake-SailPoint-&lt;date&gt;.csv          -- Shared + SailPoint columns
+  IAM-Intake-CyberArk-&lt;date&gt;.csv           -- Shared + CyberArk columns
+  IAM-Intake-OktaEntra-&lt;date&gt;.csv          -- Shared + Okta/Entra columns
+  IAM-Intake-Mapping-&lt;date&gt;.json           -- Processing log</code></pre>
+<h3 id="conditionally-generated">Conditionally Generated</h3>
+<pre><code>  IAM-Intake-Schema-&lt;date&gt;.json            -- (if -SaveSchema)</code></pre>
+<h3 id="xlsx-workbook-sheets">XLSX Workbook Sheets</h3>
+<table>
+<thead><tr>
+<th>Sheet</th>
+<th>Contents</th>
+</tr></thead><tbody>
+<tr>
+<td><code>Master</code></td>
+<td>All canonical fields plus name variants, conflict count, source files</td>
+</tr>
+<tr>
+<td><code>SailPoint</code></td>
+<td>Shared + SailPoint columns</td>
+</tr>
+<tr>
+<td><code>CyberArk</code></td>
+<td>Shared + CyberArk columns</td>
+</tr>
+<tr>
+<td><code>OktaEntra</code></td>
+<td>Shared + Okta/Entra columns</td>
+</tr>
+<tr>
+<td><code>RolesGroups</code></td>
+<td>Flattened role/group detail from <code>_detail_*</code> (excludes account tables)</td>
+</tr>
+<tr>
+<td><code>Accounts</code></td>
+<td>Flattened account detail: name, type, class, password dependencies, users</td>
+</tr>
+<tr>
+<td><code>Conflicts</code></td>
+<td>Cross-source disagreements: field, kept value, ignored value, source file</td>
+</tr>
+<tr>
+<td><code>Unmapped</code></td>
+<td>Questions the mapper could not resolve: question text and answer</td>
+</tr>
+<tr>
+<td><code>Log</code></td>
+<td>Processing log: file, sheet, format detected, score, column count, record count</td>
+</tr>
+</tbody></table>
+<p>Sheets with zero rows are automatically omitted.</p>
+<h3 id="html-app-browser">HTML App Browser</h3>
+<p>Self-contained HTML with:</p>
+<ul><li>Dropdown/search for selecting an application</li><li>Per-app sections showing all canonical fields organized by product</li><li>Provenance card (source files, name variants, confidence)</li><li>Conflicts panel highlighting cross-source disagreements</li><li>Dynamic detail tables for roles, groups, and accounts</li><li>Print-friendly</li></ul>
+<h3 id="json-payload">JSON Payload</h3>
+<p>Machine-readable format containing per-app records with:</p>
+<ul><li>All canonical fields</li><li>Detail sub-tables (parsed from <code>_detail_*</code> JSON)</li><li>Conflicts array (field, kept, ignored, source)</li><li>Unmapped questions</li><li>Schema version and generation metadata</li></ul>
+</div>
+<div id="section-powershell-consolidator-schema-learning-and-reuse" class="report-section" style="display:none">
+<h2>9. Schema Learning and Reuse</h2>
+<pre><code># Save after first run
+.\Merge-IAMIntakeData.ps1 -Path .\questionnaires -SaveSchema
+
+# Reuse on subsequent runs
+.\Merge-IAMIntakeData.ps1 -Path .\new-batch -SchemaPath .\IAM-Intake-Schema-2026-07-15.json</code></pre>
+<p>Benefits: faster processing, 100% confidence scores, consistent mapping, handles non-standard templates. Edit the JSON to fix incorrect mappings before reuse.</p>
+</div>
+<div id="section-powershell-consolidator-examples" class="report-section" style="display:none">
+<h2>10. Examples</h2>
+<h3 id="basic-consolidation">Basic Consolidation</h3>
+<pre><code>.\Merge-IAMIntakeData.ps1 -Path C:\IAM\Questionnaires</code></pre>
+<h3 id="full-run-with-schema-save">Full Run with Schema Save</h3>
+<pre><code>.\Merge-IAMIntakeData.ps1 -Path \\fileserver\iam-intake `
+    -OutputPath C:\IAM\Reports `
+    -SaveSchema -ShowUnmapped</code></pre>
+<h3 id="process-only-cyberark-questionnaires">Process Only CyberArk Questionnaires</h3>
+<pre><code>.\Merge-IAMIntakeData.ps1 -Path .\questionnaires -Product CyberArk</code></pre>
+<h3 id="dry-run-preview-only">Dry Run (Preview Only)</h3>
+<pre><code>.\Merge-IAMIntakeData.ps1 -Path .\questionnaires -DryRun</code></pre>
+<h3 id="mixed-excel-and-word-files">Mixed Excel and Word Files</h3>
+<pre><code># The script automatically handles .xlsx and .docx in the same directory
+.\Merge-IAMIntakeData.ps1 -Path C:\IAM\MixedFormats -SaveSchema</code></pre>
+</div>
+<div id="section-powershell-consolidator-extending-the-parser" class="report-section" style="display:none">
+<h2>11. Extending the Parser</h2>
+<h3 id="adding-a-new-canonical-field">Adding a New Canonical Field</h3>
+<ol><li>Add to <code>$script:CanonicalFields</code> with aliases (longer, more specific aliases rank higher):</li></ol>
+<pre><code>newField = @('full alias text', 'shorter alias', 'question text verbatim')</code></pre>
+<ol><li>If boolean, add to <code>$script:BooleanFields</code></li><li>If custom normalization needed, add rule to <code>$script:NormalizationRules</code></li><li>Add to the appropriate per-product column list in the output section</li></ol>
+<h3 id="teaching-a-new-template-vocabulary">Teaching a New Template Vocabulary</h3>
+<p>Add column caption mappings to <code>$script:StructuredHeaderRoles</code>:</p>
+<pre><code>'new caption text' = 'role'  # role = key, value, guidance, detail, name, email, acctName, etc.</code></pre>
+</div>
+<div id="section-powershell-consolidator-troubleshooting" class="report-section" style="display:none">
+<h2>12. Troubleshooting</h2>
+<table>
+<thead><tr>
+<th>Issue</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr></thead><tbody>
+<tr>
+<td>"ImportExcel module not installed"</td>
+<td>Module missing</td>
+<td><code>Install-Module ImportExcel -Scope CurrentUser</code></td>
+</tr>
+<tr>
+<td>"No .xlsx files found"</td>
+<td>Wrong path or files are .xls (old format)</td>
+<td>Check path; convert .xls to .xlsx in Excel</td>
+</tr>
+<tr>
+<td>Low mapping confidence</td>
+<td>Unusual column names</td>
+<td>Run <code>-SaveSchema</code>, edit JSON, rerun with <code>-SchemaPath</code></td>
+</tr>
+<tr>
+<td>Apps not merging correctly</td>
+<td>Different app names</td>
+<td>Check <code>_nameVariants</code> in output; the filename anchor usually resolves this</td>
+</tr>
+<tr>
+<td>Conflicts showing up</td>
+<td>Same field, different values across files</td>
+<td>Expected behavior -- check the Conflicts XLSX sheet</td>
+</tr>
+<tr>
+<td>"~$" temp files processed</td>
+<td>Excel has files open</td>
+<td>Close Excel first; script auto-skips <code>~$*</code> files</td>
+</tr>
+<tr>
+<td>Detail tables empty</td>
+<td>No structured/list sheets found</td>
+<td>This is normal for simple tabular questionnaires</td>
+</tr>
+</tbody></table>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> Review <code>IAM-Intake-Mapping-*.json</code> for full details about what was detected, and check the <code>Unmapped</code> sheet in the XLSX for questions the parser could not resolve.</p></div>
+</div>
+<div id="section-sharepoint-sync-tool-overview" class="report-section" style="display:none">
+<h2>SharePoint Sync Tool &mdash; Overview</h2>
+<h2 id="sharepoint-on-prem-sync-tool-reference-guide">SharePoint On-Prem Sync Tool -- Reference Guide</h2>
+</div>
+<div id="section-sharepoint-sync-tool-overview" class="report-section" style="display:none">
+<h2>Overview</h2>
+<p><code>Sync-SharePointSite.ps1</code> is a bidirectional file sync tool for SharePoint Server on-premises (2013, 2016, 2019). It uses the SharePoint REST API -- no external modules, no DLLs, no farm admin access required. Works with standard reader or contributor permissions.</p>
+<p>Primary use case: downloading deep folder structures (e.g., <code>IT/Apps/IAM/AppsToMigrate/App1</code>) containing Office documents, HTML files, images, and other artifacts to a local drive. Also supports uploading local changes back to SharePoint with conflict resolution.</p>
+</div>
+<div id="section-sharepoint-sync-tool-quick-start" class="report-section" style="display:none">
+<h2>1. Quick Start</h2>
+<pre><code># Download a folder tree from SharePoint to local disk
+.\Sync-SharePointSite.ps1 -SiteUrl https://sharepoint.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps/IAM/AppsToMigrate" `
+    -LocalPath C:\sync\AppsToMigrate
+
+# Preview what would be downloaded (no files transferred)
+.\Sync-SharePointSite.ps1 -SiteUrl https://sharepoint.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps/IAM" `
+    -LocalPath C:\sync\IAM -WhatIf
+
+# Upload local changes back to SharePoint
+.\Sync-SharePointSite.ps1 -SiteUrl https://sharepoint.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps/IAM" `
+    -LocalPath C:\sync\IAM -Direction Upload -WhatIf
+
+# Bidirectional sync (newer file wins)
+.\Sync-SharePointSite.ps1 -SiteUrl https://sharepoint.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps/IAM" `
+    -LocalPath C:\sync\IAM -Direction Sync</code></pre>
+</div>
+<div id="section-sharepoint-sync-tool-parameters" class="report-section" style="display:none">
+<h2>2. Parameters</h2>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SiteUrl</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>--</td>
+<td>Full URL to the SharePoint site (e.g., <code>https://sp.corp.com/sites/IT</code>)</td>
+</tr>
+<tr>
+<td><code>-RemotePath</code></td>
+<td>string</td>
+<td>No</td>
+<td><code>/</code></td>
+<td>Server-relative path within the site (e.g., <code>/Shared Documents/Apps/IAM</code>)</td>
+</tr>
+<tr>
+<td><code>-LocalPath</code></td>
+<td>string</td>
+<td>Yes</td>
+<td>--</td>
+<td>Local directory to sync to/from</td>
+</tr>
+<tr>
+<td><code>-Direction</code></td>
+<td>string</td>
+<td>No</td>
+<td><code>Download</code></td>
+<td><code>Download</code>, <code>Upload</code>, or <code>Sync</code> (bidirectional)</td>
+</tr>
+<tr>
+<td><code>-Credential</code></td>
+<td>PSCredential</td>
+<td>No</td>
+<td>--</td>
+<td>Explicit credentials; omit to use current Windows session</td>
+</tr>
+<tr>
+<td><code>-Include</code></td>
+<td>string[]</td>
+<td>No</td>
+<td>--</td>
+<td>File patterns to include: <code>*.xlsx</code>, <code>*.docx</code>, <code>*.html</code>, <code>*.png</code></td>
+</tr>
+<tr>
+<td><code>-Exclude</code></td>
+<td>string[]</td>
+<td>No</td>
+<td>--</td>
+<td>File patterns to exclude: <code>~$*</code>, <code>*.tmp</code></td>
+</tr>
+<tr>
+<td><code>-ConflictResolution</code></td>
+<td>string</td>
+<td>No</td>
+<td><code>NewerWins</code></td>
+<td><code>NewerWins</code>, <code>LocalWins</code>, <code>RemoteWins</code>, or <code>ReportOnly</code></td>
+</tr>
+<tr>
+<td><code>-MaxDepth</code></td>
+<td>int</td>
+<td>No</td>
+<td><code>50</code></td>
+<td>Maximum folder recursion depth (safety limit)</td>
+</tr>
+<tr>
+<td><code>-RetryCount</code></td>
+<td>int</td>
+<td>No</td>
+<td><code>3</code></td>
+<td>Retry attempts for transient HTTP errors</td>
+</tr>
+<tr>
+<td><code>-LogPath</code></td>
+<td>string</td>
+<td>No</td>
+<td>--</td>
+<td>Path for JSON Lines operation log</td>
+</tr>
+<tr>
+<td><code>-ConfirmReplace</code></td>
+<td>switch</td>
+<td>No</td>
+<td>--</td>
+<td>Prompt Yes/YesToAll/No/NoToAll before each file overwrite</td>
+</tr>
+<tr>
+<td><code>-Force</code></td>
+<td>switch</td>
+<td>No</td>
+<td>--</td>
+<td>Skip confirmation prompts for upload operations</td>
+</tr>
+<tr>
+<td><code>-WhatIf</code></td>
+<td>switch</td>
+<td>No</td>
+<td>--</td>
+<td>Show planned actions without executing them</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-sharepoint-sync-tool-authentication" class="report-section" style="display:none">
+<h2>3. Authentication</h2>
+<p>The tool uses a three-layer authentication strategy, trying each in order:</p>
+<h3 id="layer-1-explicit-credential">Layer 1: Explicit Credential</h3>
+<pre><code>$cred = Get-Credential -Message "SharePoint credentials"
+.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/" -LocalPath C:\sync -Credential $cred</code></pre>
+<h3 id="layer-2-default-windows-credentials">Layer 2: Default Windows Credentials</h3>
+<p>If no <code>-Credential</code> is provided and you're running on a domain-joined Windows machine, the script uses your current Kerberos/NTLM session automatically.</p>
+<pre><code># Just works on a domain-joined Windows machine
+.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/" -LocalPath C:\sync</code></pre>
+<h3 id="layer-3-interactive-prompt">Layer 3: Interactive Prompt</h3>
+<p>If default credentials fail (401), the script prompts:</p>
+<pre><code>Enter credentials for sharepoint.corp.com</code></pre>
+<p>The prompted credential is cached for the duration of the script execution.</p>
+<h3 id="powershell-7-compatibility">PowerShell 7 Compatibility</h3>
+<p>On PowerShell 7+ (Core), the script automatically uses <code>-Authentication Negotiate</code> instead of <code>-UseDefaultCredentials</code>, which does not work the same way on non-Windows platforms.</p>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> If you get 401 errors with default credentials, try providing explicit credentials with <code>-Credential (Get-Credential)</code>.</p></div>
+</div>
+<div id="section-sharepoint-sync-tool-direction-modes" class="report-section" style="display:none">
+<h2>4. Direction Modes</h2>
+<h3 id="download-default">Download (Default)</h3>
+<p>Downloads remote files to local disk. Does not modify SharePoint.</p>
+<table>
+<thead><tr>
+<th>Remote State</th>
+<th>Local State</th>
+<th>Action</th>
+</tr></thead><tbody>
+<tr>
+<td>File exists</td>
+<td>Missing</td>
+<td>Download</td>
+</tr>
+<tr>
+<td>File exists</td>
+<td>Exists, remote newer</td>
+<td>Download (overwrite)</td>
+</tr>
+<tr>
+<td>File exists</td>
+<td>Exists, local newer</td>
+<td>Skip</td>
+</tr>
+<tr>
+<td>File exists</td>
+<td>Exists, same time</td>
+<td>Skip (in sync)</td>
+</tr>
+</tbody></table>
+<h3 id="upload">Upload</h3>
+<p>Uploads local files to SharePoint. Does not modify local files.</p>
+<table>
+<thead><tr>
+<th>Local State</th>
+<th>Remote State</th>
+<th>Action</th>
+</tr></thead><tbody>
+<tr>
+<td>File exists</td>
+<td>Missing</td>
+<td>Upload (create)</td>
+</tr>
+<tr>
+<td>File exists</td>
+<td>Exists, local newer</td>
+<td>Upload (overwrite)</td>
+</tr>
+<tr>
+<td>File exists</td>
+<td>Exists, remote newer</td>
+<td>Skip</td>
+</tr>
+</tbody></table>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Important:</strong> Upload operations prompt for confirmation showing the count of files that will be modified on SharePoint. Use <code>-Force</code> to skip the prompt, or <code>-WhatIf</code> to preview without executing.</p></div>
+<h3 id="interactive-overwrite-approval-confirmreplace">Interactive Overwrite Approval (<code>-ConfirmReplace</code>)</h3>
+<p>Add <code>-ConfirmReplace</code> to get a per-file prompt before each overwrite (new files and unchanged files are never prompted):</p>
+<pre><code>.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps/IAM" `
+    -LocalPath C:\sync\IAM -Direction Sync -ConfirmReplace</code></pre>
+<p>The prompt offers four choices:</p>
+<ul><li><strong>Yes</strong> -- overwrite this file</li><li><strong>Yes to All</strong> -- overwrite this and all remaining files (stops prompting)</li><li><strong>No</strong> -- skip this file</li><li><strong>No to All</strong> -- skip this and all remaining overwrites</li></ul>
+<p>This is useful when syncing a large library and you want to review each changed file before committing.</p>
+<h3 id="sync-bidirectional">Sync (Bidirectional)</h3>
+<p>Syncs in both directions based on the <code>-ConflictResolution</code> setting.</p>
+<table>
+<thead><tr>
+<th>Remote State</th>
+<th>Local State</th>
+<th>NewerWins</th>
+<th>LocalWins</th>
+<th>RemoteWins</th>
+<th>ReportOnly</th>
+</tr></thead><tbody>
+<tr>
+<td>Remote only</td>
+<td>--</td>
+<td>Download</td>
+<td>Download</td>
+<td>Download</td>
+<td>Download</td>
+</tr>
+<tr>
+<td>--</td>
+<td>Local only</td>
+<td>Upload</td>
+<td>Upload</td>
+<td>Upload</td>
+<td>Upload</td>
+</tr>
+<tr>
+<td>Newer remote</td>
+<td>Older local</td>
+<td>Download</td>
+<td>Upload</td>
+<td>Download</td>
+<td>Conflict</td>
+</tr>
+<tr>
+<td>Older remote</td>
+<td>Newer local</td>
+<td>Upload</td>
+<td>Upload</td>
+<td>Download</td>
+<td>Conflict</td>
+</tr>
+<tr>
+<td>Same time</td>
+<td>Same time</td>
+<td>Skip</td>
+<td>Skip</td>
+<td>Skip</td>
+<td>Skip</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-sharepoint-sync-tool-path-handling" class="report-section" style="display:none">
+<h2>5. Path Handling</h2>
+<h3 id="remote-path-resolution">Remote Path Resolution</h3>
+<p>The <code>-RemotePath</code> parameter is resolved against the site's document libraries:</p>
+<pre><code># Full server-relative path (most explicit)
+-RemotePath "/sites/IT/Shared Documents/Apps/IAM"
+
+# Path within a library (auto-resolved)
+-RemotePath "/Shared Documents/Apps/IAM"
+
+# Short path (resolved against default library)
+-RemotePath "/Apps/IAM"</code></pre>
+<p>The script queries <code>_api/web/lists?$filter=BaseTemplate eq 101</code> to find document libraries, then matches the path against them. If no library matches, it tries "Shared Documents" as the default.</p>
+<h3 id="deep-folder-paths">Deep Folder Paths</h3>
+<p>Deep paths like <code>IT/Apps/IAM/AppsToMigrate/App1/Questionnaires</code> are fully supported. The local directory structure mirrors the remote structure:</p>
+<pre><code>Remote: /sites/IT/Shared Documents/Apps/IAM/AppsToMigrate/App1/data.xlsx
+Local:  C:\sync\Apps\IAM\AppsToMigrate\App1\data.xlsx</code></pre>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Warning:</strong> Windows has a 260-character path length limit (MAX_PATH). The script warns when local paths approach this limit. Consider using a shorter <code>-LocalPath</code> for deep folder structures.</p></div>
+</div>
+<div id="section-sharepoint-sync-tool-file-filtering" class="report-section" style="display:none">
+<h2>6. File Filtering</h2>
+<h3 id="include-patterns">Include Patterns</h3>
+<p>Download only specific file types:</p>
+<pre><code>.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps" `
+    -LocalPath C:\sync\Apps `
+    -Include "*.xlsx","*.docx","*.html","*.png","*.jpg","*.pdf"</code></pre>
+<h3 id="exclude-patterns">Exclude Patterns</h3>
+<p>Skip unwanted files:</p>
+<pre><code>.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/Shared Documents" `
+    -LocalPath C:\sync `
+    -Exclude "~$*","*.tmp","Thumbs.db"</code></pre>
+<h3 id="automatic-exclusions">Automatic Exclusions</h3>
+<p>The script always skips:</p>
+<ul><li><strong>System folders</strong>: Forms, _catalogs, _private, _vti_cnf, _vti_pvt, _cts, _layouts</li><li><strong>Temp files</strong>: Files starting with <code>~$</code>, <code>.tmp</code> files, <code>Thumbs.db</code>, <code>.DS_Store</code></li></ul>
+</div>
+<div id="section-sharepoint-sync-tool-whatif-mode" class="report-section" style="display:none">
+<h2>7. WhatIf Mode</h2>
+<p>Use <code>-WhatIf</code> to see exactly what the script would do without touching any files:</p>
+<pre><code>.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/Shared Documents/Apps/IAM" `
+    -LocalPath C:\sync\IAM -WhatIf</code></pre>
+<p>The output shows the complete sync manifest -- every file, its status, and the planned action. This works for Download, Upload, and Sync directions.</p>
+<div class="callout callout-success"><div class="callout-label">Tip</div><p><strong>Tip:</strong> Always run with <code>-WhatIf</code> first on a new site to understand the scope before executing.</p></div>
+</div>
+<div id="section-sharepoint-sync-tool-logging" class="report-section" style="display:none">
+<h2>8. Logging</h2>
+<p>Enable detailed logging with <code>-LogPath</code>:</p>
+<pre><code>.\Sync-SharePointSite.ps1 -SiteUrl https://sp.corp.com/sites/IT `
+    -RemotePath "/Shared Documents" -LocalPath C:\sync `
+    -LogPath C:\logs\sp-sync.jsonl</code></pre>
+<p>Each operation generates a JSON Lines entry:</p>
+<pre><code>{"timestamp":"2026-06-27T14:30:00","action":"Download","path":"Apps/IAM/App1/report.xlsx","size":45056,"status":"OK","duration_ms":234}
+{"timestamp":"2026-06-27T14:30:01","action":"Download","path":"Apps/IAM/App2/data.csv","size":12288,"status":"OK","duration_ms":156}</code></pre>
+</div>
+<div id="section-sharepoint-sync-tool-error-handling" class="report-section" style="display:none">
+<h2>9. Error Handling</h2>
+<h3 id="retry-logic">Retry Logic</h3>
+<p>Transient HTTP errors (500 Server Error, 503 Service Unavailable, 429 Too Many Requests) are retried automatically with exponential backoff:</p>
+<ul><li>Attempt 1: wait 1 second</li><li>Attempt 2: wait 3 seconds</li><li>Attempt 3: wait 9 seconds</li></ul>
+<p>The <code>-RetryCount</code> parameter controls the maximum number of retries (default: 3).</p>
+<h3 id="partial-failure">Partial Failure</h3>
+<p>If a single file fails to download or upload, the script:</p>
+<ol><li>Logs the error</li><li>Continues with the remaining files</li><li>Includes the failure in the summary count</li><li>Lists all failed files at the end</li></ol>
+<h3 id="common-errors">Common Errors</h3>
+<table>
+<thead><tr>
+<th>Error</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr></thead><tbody>
+<tr>
+<td>401 Unauthorized</td>
+<td>Credentials invalid or expired</td>
+<td>Provide <code>-Credential</code> or check domain trust</td>
+</tr>
+<tr>
+<td>403 Forbidden</td>
+<td>Insufficient permissions on site/library</td>
+<td>Request at least Read permission from site admin</td>
+</tr>
+<tr>
+<td>404 Not Found</td>
+<td>Site URL or path is wrong</td>
+<td>Verify URL in browser first</td>
+</tr>
+<tr>
+<td>File locked (423)</td>
+<td>File checked out by another user</td>
+<td>Wait for check-in, or download gets last checked-in version</td>
+</tr>
+<tr>
+<td>Path too long</td>
+<td>Local path exceeds 260 characters</td>
+<td>Use a shorter <code>-LocalPath</code> root</td>
+</tr>
+<tr>
+<td>Connection refused</td>
+<td>SharePoint server unreachable</td>
+<td>Check VPN, firewall, DNS resolution</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-sharepoint-sync-tool-examples" class="report-section" style="display:none">
+<h2>10. Examples</h2>
+<h3 id="archive-a-sharepoint-site-locally">Archive a SharePoint Site Locally</h3>
+<pre><code>.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IAMTeam" `
+    -RemotePath "/Shared Documents" `
+    -LocalPath "C:\Archives\IAMTeam" `
+    -LogPath "C:\Archives\IAMTeam\sync-log.jsonl"</code></pre>
+<h3 id="download-only-excel-and-word-files">Download Only Excel and Word Files</h3>
+<pre><code>.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IT" `
+    -RemotePath "/Shared Documents/Apps/IAM/AppsToMigrate" `
+    -LocalPath "C:\IAM\Questionnaires" `
+    -Include "*.xlsx","*.xls","*.docx","*.doc"</code></pre>
+<h3 id="upload-changed-files-back">Upload Changed Files Back</h3>
+<pre><code># Preview first
+.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IT" `
+    -RemotePath "/Shared Documents/Apps/IAM/AppsToMigrate" `
+    -LocalPath "C:\IAM\Questionnaires" `
+    -Direction Upload -WhatIf
+
+# Execute (with confirmation prompt)
+.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IT" `
+    -RemotePath "/Shared Documents/Apps/IAM/AppsToMigrate" `
+    -LocalPath "C:\IAM\Questionnaires" `
+    -Direction Upload</code></pre>
+<h3 id="bidirectional-sync-with-conflict-reporting">Bidirectional Sync with Conflict Reporting</h3>
+<pre><code>.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IT" `
+    -RemotePath "/Shared Documents/Apps/IAM" `
+    -LocalPath "C:\sync\IAM" `
+    -Direction Sync `
+    -ConflictResolution ReportOnly `
+    -LogPath "C:\sync\IAM\sync-log.jsonl"</code></pre>
+<h3 id="using-explicit-credentials">Using Explicit Credentials</h3>
+<pre><code>$cred = Get-Credential -Message "Enter DOMAIN\username for SharePoint"
+.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IT" `
+    -RemotePath "/Shared Documents" `
+    -LocalPath "C:\sync" `
+    -Credential $cred</code></pre>
+</div>
+<div id="section-sharepoint-sync-tool-workflow-sharepoint-to-consolidator-pipeline" class="report-section" style="display:none">
+<h2>11. Workflow: SharePoint to Consolidator Pipeline</h2>
+<p>A common workflow combines the SharePoint sync tool with the IAM intake consolidator:</p>
+<pre><code># Step 1: Download questionnaires from SharePoint
+.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IAM" `
+    -RemotePath "/Shared Documents/App Questionnaires" `
+    -LocalPath "C:\IAM\Questionnaires" `
+    -Include "*.xlsx"
+
+# Step 2: Consolidate downloaded Excel files
+.\Merge-IAMIntakeData.ps1 `
+    -Path "C:\IAM\Questionnaires" `
+    -OutputPath "C:\IAM\Consolidated" `
+    -SaveSchema
+
+# Step 3: Upload consolidated reports back to SharePoint
+.\Sync-SharePointSite.ps1 `
+    -SiteUrl "https://sharepoint.corp.com/sites/IAM" `
+    -RemotePath "/Shared Documents/Consolidated Reports" `
+    -LocalPath "C:\IAM\Consolidated" `
+    -Direction Upload -Force</code></pre>
+</div>
+<div id="section-sharepoint-sync-tool-technical-notes" class="report-section" style="display:none">
+<h2>12. Technical Notes</h2>
+<h3 id="rest-api-compatibility">REST API Compatibility</h3>
+<table>
+<thead><tr>
+<th>SharePoint Version</th>
+<th>REST API</th>
+<th>Tested</th>
+</tr></thead><tbody>
+<tr>
+<td>SharePoint 2013</td>
+<td>Available (limited <code>$expand</code>)</td>
+<td>Designed for</td>
+</tr>
+<tr>
+<td>SharePoint 2016</td>
+<td>Full support</td>
+<td>Designed for</td>
+</tr>
+<tr>
+<td>SharePoint 2019</td>
+<td>Full support</td>
+<td>Designed for</td>
+</tr>
+<tr>
+<td>SharePoint SE</td>
+<td>Full support</td>
+<td>Designed for</td>
+</tr>
+<tr>
+<td>SharePoint Online</td>
+<td>NOT supported</td>
+<td>Use PnP.PowerShell instead</td>
+</tr>
+</tbody></table>
+<h3 id="file-size-limits">File Size Limits</h3>
+<ul><li>Downloads: No practical size limit (streamed to disk)</li><li>Uploads: Direct upload up to 250 MB (SP 2013) or 2 GB (SP 2016+). Files over 10 MB trigger a warning about potential timeout.</li></ul>
+<h3 id="timestamp-handling">Timestamp Handling</h3>
+<ul><li>File modified timestamps are preserved on download (set via <code>[System.IO.File]::SetLastWriteTime</code>)</li><li>A 2-second tolerance is used for timestamp comparison (accounts for filesystem rounding)</li><li>Remote timestamps (<code>TimeLastModified</code>) are parsed with <code>AssumeUniversal | AdjustToUniversal</code> to stay UTC</li><li>Local files use <code>LastWriteTimeUtc</code> for comparison -- never local time</li><li>This prevents false positives from timezone differences between the SharePoint server and the client machine</li></ul>
+<h3 id="authentication-notes">Authentication Notes</h3>
+<ul><li><code>-Authentication Negotiate</code> is NOT used -- it is not a valid value for <code>Invoke-WebRequest</code> on PS 7+. Plain <code>-Credential</code> handles the NTLM/Negotiate challenge on both PowerShell editions.</li><li><code>-UseDefaultCredentials</code> works on both Windows PowerShell 5.1 and PowerShell 7+ (contrary to some documentation)</li></ul>
+</div>
+
+  </div>
+</div>
+
+<script>
+
+var sections = ["foundations-overview", "foundations-what-this-is", "foundations-prerequisites", "foundations-installation", "foundations-architecture-overview", "foundations-how-the-decision-trees-work", "foundations-known-app-catalog", "foundations-csv-output-schemas", "foundations-data-persistence", "foundations-security-considerations", "foundations-getting-help", "html-intake-tool-overview", "html-intake-tool-overview", "html-intake-tool-opening-the-tool", "html-intake-tool-starting-a-new-application", "html-intake-tool-wizard-step-1-application-identity", "html-intake-tool-wizard-step-2-how-users-log-in", "html-intake-tool-wizard-step-3-access-permissions", "html-intake-tool-wizard-step-4-sailpoint-governance", "html-intake-tool-wizard-step-5-cyberark-privileged-access", "html-intake-tool-wizard-step-6-okta-entra-id", "html-intake-tool-wizard-step-7-review-export", "html-intake-tool-portfolio-mode-multiple-applications", "html-intake-tool-session-recovery", "html-intake-tool-troubleshooting", "powershell-consolidator-overview", "powershell-consolidator-overview", "powershell-consolidator-quick-start", "powershell-consolidator-parameters", "powershell-consolidator-adaptive-format-detection", "powershell-consolidator-app-identity-and-merge", "powershell-consolidator-value-normalization", "powershell-consolidator-fuzzy-canonical-mapping", "powershell-consolidator-detail-fields-detail", "powershell-consolidator-output-files", "powershell-consolidator-schema-learning-and-reuse", "powershell-consolidator-examples", "powershell-consolidator-extending-the-parser", "powershell-consolidator-troubleshooting", "sharepoint-sync-tool-overview", "sharepoint-sync-tool-overview", "sharepoint-sync-tool-quick-start", "sharepoint-sync-tool-parameters", "sharepoint-sync-tool-authentication", "sharepoint-sync-tool-direction-modes", "sharepoint-sync-tool-path-handling", "sharepoint-sync-tool-file-filtering", "sharepoint-sync-tool-whatif-mode", "sharepoint-sync-tool-logging", "sharepoint-sync-tool-error-handling", "sharepoint-sync-tool-examples", "sharepoint-sync-tool-workflow-sharepoint-to-consolidator-pipeline", "sharepoint-sync-tool-technical-notes"];
+function showSection(id) {
+    sections.forEach(function(s) {
+        var el = document.getElementById('section-' + s);
+        if (el) el.style.display = 'none';
+    });
+    var target = document.getElementById('section-' + id);
+    if (target) target.style.display = 'block';
+    document.querySelectorAll('#sidebar a, #mobile-nav a').forEach(function(a) {
+        a.classList.remove('active');
+    });
+    document.querySelectorAll('#sidebar a[onclick], #mobile-nav a[onclick]').forEach(function(a) {
+        if (a.getAttribute('onclick') && a.getAttribute('onclick').indexOf("'" + id + "'") !== -1) {
+            a.classList.add('active');
+        }
+    });
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+    window.scrollTo(0, 0);
+}
+window.showSection = showSection;
+document.addEventListener('DOMContentLoaded', function() {
+    var hash = location.hash.replace('#', '');
+    showSection(hash && sections.indexOf(hash) !== -1 ? hash : sections[0]);
+});
+
+</script>
+</body>
+</html>

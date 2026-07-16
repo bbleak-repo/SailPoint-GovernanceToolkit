@@ -1,0 +1,2103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IAM Application Integration Intake</title>
+<style>
+/* ===== RESET & VARIABLES ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --primary: #1b2a4a;
+  --primary-mid: #2d5a8a;
+  --primary-light: #3a7bc8;
+  --accent: #00897b;
+  --accent-light: #e0f2f1;
+  --success: #2e7d32;
+  --success-bg: #f0faf4;
+  --warning: #f57f17;
+  --warning-bg: #fefcf0;
+  --danger: #c62828;
+  --danger-bg: #fdf0ef;
+  --info-bg: #f0f6fd;
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --border: #dde2ea;
+  --text: #1a1a2e;
+  --text-secondary: #555;
+  --text-muted: #888;
+  --radius: 10px;
+  --shadow: 0 2px 8px rgba(0,0,0,.06);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,.1);
+}
+html { font-size: 15px; scroll-behavior: smooth; }
+body { font-family: -apple-system, 'Segoe UI', system-ui, Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text); background: var(--bg); line-height: 1.65; min-height: 100vh; }
+
+/* ===== HERO BAR ===== */
+.hero { background: linear-gradient(135deg, #1b2a4a 0%, #2d5a8a 60%, #3a7bc8 100%);
+  color: #fff; padding: 28px 32px 24px; }
+.hero-inner { max-width: 1280px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.hero h1 { font-size: 1.6rem; font-weight: 700; }
+.hero .subtitle { color: #b8d4f0; font-size: .92rem; margin-top: 2px; }
+.hero-actions { display: flex; gap: 8px; align-items: center; }
+.hero-actions button { background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.25);
+  color: #fff; padding: 6px 14px; border-radius: 6px; font-size: .82rem; cursor: pointer; transition: background .2s; }
+.hero-actions button:hover { background: rgba(255,255,255,.25); }
+
+/* ===== MAIN LAYOUT ===== */
+.app-layout { max-width: 1280px; margin: 0 auto; padding: 24px 24px 80px;
+  display: flex; gap: 24px; align-items: flex-start; }
+.wizard-panel { flex: 3; min-width: 0; }
+.summary-panel { flex: 2; min-width: 320px; position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+
+/* ===== STEP NAVIGATION ===== */
+.step-nav { display: flex; gap: 4px; margin-bottom: 20px; padding: 4px; background: var(--surface);
+  border-radius: 8px; box-shadow: var(--shadow); overflow-x: auto; }
+.step-pill { flex: 1; min-width: 0; padding: 10px 8px; border: none; background: transparent;
+  border-radius: 6px; cursor: pointer; text-align: center; font-size: .78rem; font-weight: 500;
+  color: var(--text-muted); transition: all .2s; white-space: nowrap; }
+.step-pill:hover { background: var(--bg); color: var(--text-secondary); }
+.step-pill.active { background: var(--primary); color: #fff; font-weight: 600; }
+.step-pill.completed { color: var(--success); }
+.step-pill.completed::before { content: ""; display: inline-block; width: 6px; height: 6px;
+  background: var(--success); border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.step-pill .step-num { display: block; font-size: .7rem; color: inherit; opacity: .7; margin-bottom: 2px; }
+
+/* ===== WIZARD CARD ===== */
+.wizard-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 32px 36px; }
+.wizard-card h2 { font-size: 1.35rem; font-weight: 700; color: var(--primary); margin-bottom: 6px; }
+.wizard-card .step-desc { color: var(--text-secondary); font-size: .92rem; margin-bottom: 24px;
+  padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.wizard-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 28px;
+  padding-top: 20px; border-top: 1px solid var(--border); }
+
+/* ===== FORM ELEMENTS ===== */
+.form-group { margin-bottom: 20px; }
+.form-group label { display: block; font-weight: 600; font-size: .88rem; color: var(--text); margin-bottom: 6px; }
+.form-group .hint { font-size: .8rem; color: var(--text-muted); margin-bottom: 6px; }
+input[type="text"], input[type="url"], input[type="email"], input[type="number"], textarea, select {
+  width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: .92rem; font-family: inherit; color: var(--text); background: var(--surface);
+  transition: border-color .2s, box-shadow .2s; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px rgba(58,123,200,.12); }
+textarea { resize: vertical; min-height: 80px; }
+
+.radio-group, .checkbox-group { display: flex; flex-direction: column; gap: 8px; }
+.radio-option, .checkbox-option { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all .2s; }
+.radio-option:hover, .checkbox-option:hover { border-color: var(--primary-light); background: #f8faff; }
+.radio-option.selected, .checkbox-option.selected { border-color: var(--primary-light);
+  background: #f0f6fd; box-shadow: 0 0 0 2px rgba(58,123,200,.15); }
+.radio-option input, .checkbox-option input { margin-top: 3px; accent-color: var(--primary-mid); }
+.radio-option .option-content, .checkbox-option .option-content { flex: 1; }
+.radio-option .option-label, .checkbox-option .option-label { font-weight: 600; font-size: .88rem; }
+.radio-option .option-desc, .checkbox-option .option-desc { font-size: .8rem; color: var(--text-secondary); margin-top: 2px; }
+
+.inline-group { display: flex; gap: 12px; flex-wrap: wrap; }
+.inline-group .form-group { flex: 1; min-width: 200px; }
+
+/* ===== BUTTONS ===== */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; border-radius: 6px;
+  font-size: .88rem; font-weight: 600; font-family: inherit; cursor: pointer; transition: all .2s; border: none; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-mid); }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-accent:hover { background: #00796b; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+.btn-outline:hover { border-color: var(--primary-light); color: var(--primary); }
+.btn-sm { padding: 6px 12px; font-size: .8rem; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: #b71c1c; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ===== CALLOUTS ===== */
+.callout { border-left: 4px solid; border-radius: 6px; padding: 14px 18px; margin: 16px 0; font-size: .88rem; }
+.callout-info { border-color: var(--primary-mid); background: var(--info-bg); }
+.callout-warn { border-color: var(--warning); background: var(--warning-bg); }
+.callout-success { border-color: var(--success); background: var(--success-bg); }
+.callout-danger { border-color: var(--danger); background: var(--danger-bg); }
+.callout strong { display: block; margin-bottom: 4px; font-size: .9rem; }
+
+/* ===== BADGES ===== */
+.badge { display: inline-block; font-size: .72rem; font-weight: 600; padding: 3px 10px;
+  border-radius: 12px; margin-right: 4px; vertical-align: middle; }
+.badge-info { background: #dce8f5; color: var(--primary); }
+.badge-success { background: #d4edda; color: #1b5e30; }
+.badge-warning { background: #fff3cd; color: #7a5e00; }
+.badge-danger { background: #fde4e1; color: #9b2c2c; }
+.badge-neutral { background: #e9ecef; color: #495057; }
+
+/* ===== SUMMARY PANEL ===== */
+.summary-panel .panel-header { background: var(--surface); border-radius: var(--radius) var(--radius) 0 0;
+  padding: 16px 20px; box-shadow: var(--shadow); border-bottom: 1px solid var(--border); }
+.summary-panel .panel-header h3 { font-size: 1rem; color: var(--primary); }
+.app-tabs { display: flex; gap: 2px; margin-top: 10px; overflow-x: auto; }
+.app-tab { padding: 6px 14px; border: 1px solid var(--border); border-bottom: none;
+  border-radius: 6px 6px 0 0; font-size: .78rem; font-weight: 500; cursor: pointer;
+  background: var(--bg); color: var(--text-secondary); transition: all .2s; white-space: nowrap; }
+.app-tab.active { background: var(--surface); color: var(--primary); font-weight: 600; border-color: var(--primary-light); }
+.app-tab .tab-close { margin-left: 6px; opacity: .5; font-size: .7rem; }
+.app-tab .tab-close:hover { opacity: 1; color: var(--danger); }
+
+.summary-body { background: var(--surface); border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: var(--shadow); padding: 16px 20px; }
+.summary-card { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+.summary-card h4 { font-size: .85rem; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.summary-card .card-icon { width: 20px; height: 20px; border-radius: 4px; display: flex;
+  align-items: center; justify-content: center; font-size: .7rem; font-weight: 700; color: #fff; }
+.icon-sp { background: #0033a0; }
+.icon-ca { background: #d4213d; }
+.icon-okta { background: #007dc1; }
+.icon-login { background: var(--accent); }
+.summary-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: .82rem; }
+.summary-row .row-label { color: var(--text-muted); }
+.summary-row .row-value { font-weight: 500; color: var(--text); text-align: right; max-width: 60%; }
+.summary-empty { text-align: center; color: var(--text-muted); font-size: .85rem; padding: 20px 0; }
+
+/* ===== PROGRESS BAR ===== */
+.progress-bar { height: 6px; background: #e9ecef; border-radius: 3px; margin: 12px 0 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--primary-light));
+  border-radius: 3px; transition: width .4s ease; }
+.progress-label { font-size: .72rem; color: var(--text-muted); text-align: right; }
+
+/* ===== DYNAMIC ROLE LIST ===== */
+.role-list { display: flex; flex-direction: column; gap: 8px; }
+.role-entry { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: #fafbfc; }
+.role-entry input, .role-entry select { flex: 1; min-width: 0; }
+.role-entry .btn-remove { flex-shrink: 0; padding: 8px; background: transparent;
+  border: none; color: var(--text-muted); cursor: pointer; font-size: 1rem; }
+.role-entry .btn-remove:hover { color: var(--danger); }
+
+/* ===== KNOWN APP CATALOG MODAL ===== */
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.5); z-index: 1000; align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  width: 90%; max-width: 640px; max-height: 80vh; display: flex; flex-direction: column; }
+.modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; }
+.modal-header h3 { font-size: 1.1rem; color: var(--primary); }
+.modal-close { background: none; border: none; font-size: 1.3rem; cursor: pointer;
+  color: var(--text-muted); padding: 4px; }
+.modal-close:hover { color: var(--text); }
+.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+.catalog-search { margin-bottom: 16px; }
+.catalog-search input { width: 100%; }
+.catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.catalog-item { padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: all .2s; text-align: center; }
+.catalog-item:hover { border-color: var(--primary-light); background: #f8faff; }
+.catalog-item.selected { border-color: var(--primary-light); background: #f0f6fd;
+  box-shadow: 0 0 0 2px rgba(58,123,200,.15); }
+.catalog-item .app-name { font-weight: 600; font-size: .88rem; }
+.catalog-item .app-vendor { font-size: .75rem; color: var(--text-muted); }
+
+/* ===== BOOKMARKLET SECTION ===== */
+.bookmarklet-area { background: #f8faff; border: 1px dashed var(--primary-light);
+  border-radius: 8px; padding: 20px; margin: 16px 0; }
+.bookmarklet-link { display: inline-block; padding: 10px 20px; background: var(--primary);
+  color: #fff; border-radius: 6px; font-weight: 600; font-size: .85rem;
+  text-decoration: none; cursor: grab; margin: 8px 0; }
+.bookmarklet-link:active { cursor: grabbing; }
+.bookmarklet-instructions { font-size: .82rem; color: var(--text-secondary); }
+.bookmarklet-instructions ol { padding-left: 20px; margin: 8px 0; }
+.bookmarklet-instructions li { margin: 4px 0; }
+.paste-area { margin-top: 16px; }
+.paste-area textarea { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: .8rem; min-height: 120px; }
+.login-results { margin-top: 12px; }
+
+/* ===== EXPORT DRAWER ===== */
+.export-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface);
+  border-top: 1px solid var(--border); box-shadow: 0 -2px 8px rgba(0,0,0,.06);
+  padding: 12px 24px; z-index: 100; }
+.export-inner { max-width: 1280px; margin: 0 auto; display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; }
+.export-inner .export-status { font-size: .82rem; color: var(--text-secondary); }
+.export-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ===== REVIEW STEP ===== */
+.review-section { margin-bottom: 24px; }
+.review-section h3 { font-size: 1rem; font-weight: 700; color: var(--primary); margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.review-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.review-item { display: flex; justify-content: space-between; padding: 6px 0; font-size: .85rem; }
+.review-item .ri-label { color: var(--text-muted); }
+.review-item .ri-value { font-weight: 500; }
+.review-item .ri-value.unknown { color: var(--warning); font-style: italic; }
+.validation-list { list-style: none; padding: 0; }
+.validation-list li { padding: 8px 12px; margin: 4px 0; border-radius: 6px; font-size: .85rem; display: flex; align-items: center; gap: 8px; }
+.validation-list .v-warn { background: var(--warning-bg); color: #7a5e00; }
+.validation-list .v-error { background: var(--danger-bg); color: #9b2c2c; }
+.validation-list .v-ok { background: var(--success-bg); color: #1b5e30; }
+
+/* ===== TABLES ===== */
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .85rem; }
+th, td { text-align: left; padding: 10px 14px; border: 1px solid var(--border); }
+th { background: #eef2f8; font-weight: 600; color: var(--primary); white-space: nowrap; }
+tr:nth-child(even) td { background: #f8f9fc; }
+
+/* ===== FALLBACK QUESTION TRANSITION ===== */
+.fallback-container { overflow: hidden; transition: max-height .4s ease, opacity .3s ease; }
+.fallback-container.hidden { max-height: 0; opacity: 0; }
+.fallback-container.visible { max-height: 500px; opacity: 1; }
+.fallback-intro { font-size: .82rem; color: var(--primary-mid); font-weight: 500;
+  margin-bottom: 10px; padding: 8px 12px; background: var(--info-bg); border-radius: 6px; }
+
+/* ===== PRE-FILLED INDICATOR ===== */
+.prefilled { position: relative; }
+.prefilled::after { content: "Auto-filled"; position: absolute; top: -8px; right: 8px;
+  font-size: .65rem; font-weight: 600; color: var(--accent); background: var(--accent-light);
+  padding: 1px 6px; border-radius: 4px; }
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 1024px) {
+  .app-layout { flex-direction: column; }
+  .summary-panel { position: static; max-height: none; min-width: 0; }
+}
+@media (max-width: 768px) {
+  .hero { padding: 20px 16px; }
+  .hero h1 { font-size: 1.3rem; }
+  .app-layout { padding: 16px 12px 80px; }
+  .wizard-card { padding: 20px 18px; }
+  .step-nav { gap: 2px; }
+  .step-pill { font-size: .7rem; padding: 8px 4px; }
+  .inline-group { flex-direction: column; }
+  .inline-group .form-group { min-width: 0; }
+  .review-grid { grid-template-columns: 1fr; }
+  .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .summary-toggle { display: block; width: 100%; padding: 10px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; text-align: center; font-weight: 600;
+    font-size: .85rem; cursor: pointer; margin-bottom: 12px; }
+  .summary-panel.collapsed .summary-body,
+  .summary-panel.collapsed .panel-header { display: none; }
+}
+@media (min-width: 769px) {
+  .summary-toggle { display: none; }
+}
+
+/* ===== PRINT ===== */
+@media print {
+  body { background: #fff; }
+  .hero { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .wizard-card, .summary-card { box-shadow: none; break-inside: avoid; }
+  .export-bar, .hero-actions, .wizard-nav, .step-nav, .bookmarklet-area { display: none; }
+  .app-layout { display: block; }
+  .summary-panel { position: static; }
+  .modal-overlay { display: none !important; }
+}
+
+/* ===== ANIMATIONS ===== */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.step-content { animation: fadeIn .3s ease; }
+
+/* ===== V2 FIELD CHECKLIST ===== */
+.field-checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.field-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; cursor: pointer; }
+.field-check:hover { background: #f8faff; }
+.field-check input { accent-color: var(--primary-mid); }
+.field-check .fc-label { font-weight: 500; }
+.field-check .fc-tag { font-size: .68rem; color: var(--text-muted); }
+
+/* ===== HLA CHECKLIST ===== */
+.hla-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.hla-item { padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: all .2s; }
+.hla-item:hover { border-color: var(--primary-light); }
+.hla-item.checked { border-color: var(--warning); background: var(--warning-bg); }
+.hla-item .hla-q { font-size: .85rem; font-weight: 500; }
+.hla-item .hla-toggle { display: flex; gap: 8px; margin-top: 8px; }
+.hla-item .hla-btn { padding: 4px 14px; border-radius: 4px; font-size: .78rem; font-weight: 600;
+  border: 1px solid var(--border); background: var(--surface); cursor: pointer; }
+.hla-item .hla-btn.yes { }
+.hla-item .hla-btn.active-yes { background: var(--warning); color: #fff; border-color: var(--warning); }
+.hla-item .hla-btn.active-no { background: var(--success); color: #fff; border-color: var(--success); }
+
+/* ===== DERIVED RESULT DISPLAY ===== */
+.derived-result { background: #f8faff; border: 1px solid var(--primary-light);
+  border-radius: 8px; padding: 16px 20px; margin: 16px 0; }
+.derived-result h4 { font-size: .9rem; color: var(--primary); margin-bottom: 8px; }
+.derived-result .dr-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: .85rem; }
+.derived-result .dr-label { color: var(--text-secondary); }
+.derived-result .dr-value { font-weight: 600; }
+
+/* ===== GAP CALLOUTS ===== */
+.gap-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.gap-item { padding: 10px 14px; border-radius: 6px; font-size: .82rem;
+  background: var(--warning-bg); border-left: 3px solid var(--warning); }
+.gap-item.info { background: var(--info-bg); border-left-color: var(--primary-mid); }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <div class="hero-inner">
+    <div>
+      <h1>IAM Application Integration Intake</h1>
+      <div class="subtitle">Help the Identity & Access Management team integrate your application</div>
+    </div>
+    <div class="hero-actions">
+      <button onclick="IAM.showModal('catalog-modal')">Known App Catalog</button>
+      <button onclick="IAM.addApp()">+ Add Application</button>
+      <button onclick="IAM.clearSession()" title="Clear all data and start over">Reset</button>
+    </div>
+  </div>
+</header>
+
+<!-- ===== MAIN LAYOUT ===== -->
+<div class="app-layout">
+
+  <!-- WIZARD PANEL -->
+  <div class="wizard-panel">
+    <nav class="step-nav" id="step-nav"></nav>
+    <div id="wizard-content"></div>
+  </div>
+
+  <!-- SUMMARY PANEL -->
+  <div class="summary-panel" id="summary-panel">
+    <button class="summary-toggle" onclick="IAM.toggleSummary()">View Integration Map</button>
+    <div class="panel-header">
+      <h3>Integration Map</h3>
+      <div class="app-tabs" id="app-tabs"></div>
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="progress-label" id="progress-label">0% complete</div>
+    </div>
+    <div class="summary-body" id="summary-body"></div>
+  </div>
+
+</div>
+
+<!-- ===== EXPORT BAR ===== -->
+<div class="export-bar">
+  <div class="export-inner">
+    <div class="export-status" id="export-status">Ready to export when you complete the wizard</div>
+    <div class="export-buttons">
+      <button class="btn btn-sm btn-outline" onclick="IAM.exportCSV('sailpoint')">SailPoint CSV</button>
+      <button class="btn btn-sm btn-outline" onclick="IAM.exportCSV('cyberark')">CyberArk CSV</button>
+      <button class="btn btn-sm btn-outline" onclick="IAM.exportCSV('okta')">Okta/Entra CSV</button>
+      <button class="btn btn-sm btn-outline" onclick="IAM.exportCSV('login')">Login Analysis CSV</button>
+      <button class="btn btn-sm btn-outline" onclick="IAM.exportCSV('master')">Master CSV</button>
+      <button class="btn btn-sm btn-accent" onclick="IAM.exportJSON()">Export JSON</button>
+      <button class="btn btn-sm btn-primary" onclick="IAM.exportAllCSV()">Export All</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== KNOWN APP CATALOG MODAL ===== -->
+<div class="modal-overlay" id="catalog-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Known Application Catalog</h3>
+      <button class="modal-close" onclick="IAM.closeModal('catalog-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="catalog-search">
+        <input type="text" id="catalog-search-input" placeholder="Search applications..."
+          oninput="IAM.filterCatalog(this.value)">
+      </div>
+      <div class="catalog-grid" id="catalog-grid"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="IAM.closeModal('catalog-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="IAM.applyKnownApp()">Apply Selection</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== BOOKMARKLET MODAL ===== -->
+<div class="modal-overlay" id="bookmarklet-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Login Page Analysis</h3>
+      <button class="modal-close" onclick="IAM.closeModal('bookmarklet-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="callout callout-info">
+        <strong>Two ways to capture login page data</strong>
+        Choose whichever method works best for you. Both produce the same result.
+      </div>
+
+      <h4 style="margin:16px 0 8px;color:var(--primary);">Option 1: Bookmarklet (Recommended)</h4>
+      <div class="bookmarklet-instructions">
+        <ol>
+          <li>Drag this button to your browser's bookmark bar:</li>
+        </ol>
+        <a class="bookmarklet-link" id="bookmarklet-link" href="javascript:void(0)">IAM Login Analyzer</a>
+        <ol start="2">
+          <li>Navigate to your application's login page</li>
+          <li>Click the bookmarklet in your bookmark bar</li>
+          <li>Copy the JSON that appears and paste it below</li>
+        </ol>
+      </div>
+      <div class="paste-area">
+        <label style="font-weight:600;font-size:.85rem;">Paste bookmarklet output:</label>
+        <textarea id="bookmarklet-paste" placeholder="Paste the JSON from the bookmarklet here..."></textarea>
+        <button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="IAM.parseBookmarkletOutput()">Parse Bookmarklet Data</button>
+      </div>
+
+      <hr style="margin:20px 0;border:none;border-top:1px solid var(--border);">
+
+      <h4 style="margin:0 0 8px;color:var(--primary);">Option 2: Paste Page Source</h4>
+      <div class="bookmarklet-instructions">
+        <ol>
+          <li>Navigate to your application's login page</li>
+          <li>Right-click the page and select "View Page Source"</li>
+          <li>Select all (Ctrl+A / Cmd+A), copy, and paste below</li>
+        </ol>
+      </div>
+      <div class="paste-area">
+        <label style="font-weight:600;font-size:.85rem;">Paste page source code:</label>
+        <textarea id="source-paste" placeholder="Paste the HTML source code here..."></textarea>
+        <button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="IAM.parsePageSource()">Analyze Source Code</button>
+      </div>
+
+      <div class="login-results" id="login-results" style="display:none;">
+        <div class="callout callout-success">
+          <strong>Analysis Complete</strong>
+          <div id="login-results-summary"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="IAM.closeModal('bookmarklet-modal')">Close</button>
+      <button class="btn btn-primary" id="apply-login-btn" style="display:none;" onclick="IAM.applyLoginAnalysis()">Apply to Wizard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===================================================================
+   IAM APPLICATION INTEGRATION INTAKE TOOL
+   Single-file, self-contained, zero dependencies
+   =================================================================== */
+(function() {
+'use strict';
+
+/* ===== KNOWN APP CATALOG ===== */
+const KNOWN_APPS = {
+  "ServiceNow": {
+    vendor: "ServiceNow", deploymentType: "saas",
+    sp: { nativeConnector: true, connectorType: "Cloud-to-Cloud", protocol: "REST Table API", pattern: 1, scim: true },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["admin", "itil", "approver_user", "catalog_admin", "knowledge_admin"]
+  },
+  "Salesforce": {
+    vendor: "Salesforce", deploymentType: "saas",
+    sp: { nativeConnector: true, connectorType: "Cloud-to-Cloud", protocol: "REST/SOAP", pattern: 1, scim: true },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["System Administrator", "Standard User", "Read Only", "Marketing User"]
+  },
+  "AWS IAM": {
+    vendor: "Amazon Web Services", deploymentType: "iaas",
+    sp: { nativeConnector: true, connectorType: "Cloud-to-Cloud", protocol: "AWS IAM API", pattern: 1 },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Cloud", authMethod: "apiToken", access: "browser" },
+    okta: { oin: true, signOnMode: "saml" },
+    roles: ["AdministratorAccess", "PowerUserAccess", "ReadOnlyAccess", "IAMFullAccess"]
+  },
+  "Microsoft Entra ID": {
+    vendor: "Microsoft", deploymentType: "saas",
+    sp: { nativeConnector: true, connectorType: "Cloud-to-Cloud", protocol: "Microsoft Graph API", pattern: 1 },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Cloud", authMethod: "oauth", access: "browser" },
+    okta: { oin: true, signOnMode: "oidc" },
+    roles: ["Global Administrator", "User Administrator", "Security Reader", "Application Administrator"]
+  },
+  "GitHub Enterprise": {
+    vendor: "GitHub (Microsoft)", deploymentType: "saas",
+    sp: { nativeConnector: false, pattern: 3, scim: true, note: "SCIM + REST API via Web Services Connector" },
+    ca: { marketplace: true, psm: false, cpm: false, category: "Web", authMethod: "apiToken", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["Owner", "Member", "Outside Collaborator", "Security Manager"]
+  },
+  "Workday": {
+    vendor: "Workday", deploymentType: "saas",
+    sp: { nativeConnector: true, connectorType: "Cloud-to-Cloud", protocol: "Web Services API", pattern: 1 },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml" },
+    roles: ["Security Administrator", "HR Partner", "Benefits Administrator", "Report Writer"]
+  },
+  "Splunk": {
+    vendor: "Splunk (Cisco)", deploymentType: "hybrid",
+    sp: { nativeConnector: false, pattern: 3, note: "REST API via Web Services Connector" },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml" },
+    roles: ["admin", "power", "user", "can_delete"]
+  },
+  "PagerDuty": {
+    vendor: "PagerDuty", deploymentType: "saas",
+    sp: { nativeConnector: false, pattern: 3, note: "REST API v2" },
+    ca: { marketplace: false, psm: false, cpm: false, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["Account Owner", "Global Admin", "Manager", "Responder", "Observer"]
+  },
+  "SAP ECC": {
+    vendor: "SAP", deploymentType: "onprem",
+    sp: { nativeConnector: true, connectorType: "VA-Based", protocol: "RFC/BAPI", pattern: 1 },
+    ca: { marketplace: true, psm: true, cpm: true, category: "ThickClient", authMethod: "localPassword", access: "thickClient" },
+    okta: { oin: false },
+    roles: ["SAP_ALL", "SAP_NEW", "Basis Administrator"]
+  },
+  "Oracle EBS": {
+    vendor: "Oracle", deploymentType: "onprem",
+    sp: { nativeConnector: true, connectorType: "VA-Based", protocol: "JDBC", pattern: 1 },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: false },
+    roles: ["System Administrator", "Application Developer", "Functional Administrator"]
+  },
+  "Active Directory": {
+    vendor: "Microsoft", deploymentType: "onprem",
+    sp: { nativeConnector: true, connectorType: "VA-Based", protocol: "LDAP/LDAPS", pattern: 1 },
+    ca: { marketplace: true, psm: true, cpm: true, category: "Windows", authMethod: "adKerberos", access: "rdp" },
+    okta: { oin: false },
+    roles: ["Domain Admin", "Enterprise Admin", "Account Operator", "Server Operator"]
+  },
+  "Jira / Confluence": {
+    vendor: "Atlassian", deploymentType: "saas",
+    sp: { nativeConnector: false, pattern: 3, scim: true, note: "SCIM + REST API" },
+    ca: { marketplace: false, psm: false, cpm: false, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["Site Admin", "Project Admin", "Member", "Guest"]
+  },
+  "Slack Enterprise": {
+    vendor: "Slack (Salesforce)", deploymentType: "saas",
+    sp: { nativeConnector: false, pattern: 3, scim: true, note: "SCIM via Web Services Connector" },
+    ca: { marketplace: false, psm: false, cpm: false, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["Owner", "Admin", "Member", "Guest"]
+  },
+  "Box": {
+    vendor: "Box", deploymentType: "saas",
+    sp: { nativeConnector: false, pattern: 3, scim: true, note: "REST API + SCIM" },
+    ca: { marketplace: false, psm: false, cpm: false, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml", scim: true },
+    roles: ["Admin", "Co-Admin", "User", "External Collaborator"]
+  },
+  "CrowdStrike": {
+    vendor: "CrowdStrike", deploymentType: "saas",
+    sp: { nativeConnector: false, pattern: 4, note: "Governance-only; security tool" },
+    ca: { marketplace: false, psm: false, cpm: false, category: "Web", authMethod: "localPassword", access: "browser" },
+    okta: { oin: true, signOnMode: "saml" },
+    roles: ["Falcon Administrator", "Falcon Analyst", "Falcon Investigator", "Read Only Analyst"]
+  }
+};
+
+/* ===== STEP DEFINITIONS ===== */
+const STEPS = [
+  { id: 1, label: "Application", title: "Application Identity", desc: "Tell us about your application -- name, URL, and who owns it.", always: true },
+  { id: 2, label: "Login", title: "How Users Log In", desc: "Help us understand how people authenticate to your application.", always: true },
+  { id: 3, label: "Permissions", title: "Access & Permissions", desc: "What roles and admin accounts exist in your application?", always: true },
+  { id: 4, label: "SailPoint", title: "SailPoint Governance", desc: "Information needed to bring your app under access governance.", always: true },
+  { id: 5, label: "CyberArk", title: "CyberArk Privileged Access", desc: "Details about privileged/admin accounts for secure vaulting.", always: false },
+  { id: 6, label: "Okta / Entra", title: "Okta / Entra ID", desc: "Single sign-on and identity federation details.", always: false },
+  { id: 7, label: "Review", title: "Review & Export", desc: "Review your entries and export the data.", always: true }
+];
+
+/* ===== DATA MODEL ===== */
+function createApp() {
+  return {
+    id: crypto.randomUUID(),
+    appName: '', appUrl: '', vendor: '', deploymentType: '',
+    estimatedUsers: '', appOwnerName: '', appOwnerEmail: '', description: '',
+    knownAppMatch: null,
+    loginMethod: '', identityProvider: '', authProtocol: '',
+    hasMfa: null, mfaTypes: [],
+    loginAnalysis: null,
+    hasRoles: null,
+    roles: [],
+    hasPrivilegedAccounts: null, adminAccountCount: 0,
+    adminAccountTypes: [], adminAccessMethods: [],
+    hasApi: null, apiType: '', apiSupportsWrite: null,
+    canExportCsv: null, csvExportMethod: '', fileDeliveryMethod: '',
+    hasAdIntegration: null,
+    v2Fields: { accountType: null, created: null, lastLogin: null, entOwner: null, entType: null, entRisk: null },
+    hla: { modifySecurity: null, manageUsers: null, sensitiveData: null, serviceAccount: null, impact100: null, infra: null },
+    adminAuthMethod: '', canChangePasswordViaApi: null,
+    adminMfaRequired: null, adminMfaType: '',
+    cyberarkMarketplace: null,
+    currentIdp: '', oktaSignOnMode: '', hasScimProvisioning: null,
+    oktaAppLabel: '', migrationTarget: '',
+    notes: '',
+    _derived: { spPattern: null, spDelivery: null, caClass: null, oktaMigration: null, completion: 0 },
+    _step: 1, _modified: new Date().toISOString()
+  };
+}
+
+const STATE = {
+  apps: [createApp()],
+  activeIndex: 0,
+  sessionId: crypto.randomUUID(),
+  catalogSelection: null,
+  _lastLoginAnalysis: null
+};
+
+/* ===== HELPERS ===== */
+function $(sel) { return document.querySelector(sel); }
+function $$(sel) { return document.querySelectorAll(sel); }
+function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function app() { return STATE.apps[STATE.activeIndex]; }
+
+function setVal(key, val) {
+  const a = app();
+  if (key.includes('.')) {
+    const parts = key.split('.');
+    let obj = a;
+    for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+    obj[parts[parts.length - 1]] = val;
+  } else {
+    a[key] = val;
+  }
+  a._modified = new Date().toISOString();
+  computeDerived();
+  renderSummary();
+  saveSession();
+}
+
+function getVal(key) {
+  const a = app();
+  if (key.includes('.')) {
+    const parts = key.split('.');
+    let obj = a;
+    for (const p of parts) { if (obj == null) return null; obj = obj[p]; }
+    return obj;
+  }
+  return a[key];
+}
+
+/* ===== DECISION ENGINES ===== */
+function computeDerived() {
+  const a = app();
+  a._derived.spPattern = deriveSailPoint(a);
+  a._derived.spDelivery = deriveFileDelivery(a);
+  a._derived.caClass = deriveCyberArk(a);
+  a._derived.oktaMigration = deriveOktaMigration(a);
+  a._derived.completion = computeCompletion(a);
+}
+
+function deriveSailPoint(a) {
+  const known = a.knownAppMatch ? KNOWN_APPS[a.knownAppMatch] : null;
+  if (known && known.sp.nativeConnector) {
+    return { pattern: 1, label: 'Direct Connector (R/W)', confidence: 'high',
+      detail: known.sp.connectorType + ' via ' + (known.sp.protocol || 'native') };
+  }
+  if (known && known.sp.pattern) {
+    const labels = { 1:'Direct Connector (R/W)', 2:'Flat File / CSV', 3:'Web Services (Custom)', 4:'Governance-Only' };
+    return { pattern: known.sp.pattern, label: labels[known.sp.pattern], confidence: 'high', detail: known.sp.note || '' };
+  }
+  if (a.hasApi === true) {
+    if (a.apiSupportsWrite === true) return { pattern: 3, label: 'Web Services (Custom)', confidence: 'medium', detail: (a.apiType||'REST').toUpperCase() + ' API with write' };
+    if (a.apiSupportsWrite === false) return { pattern: 4, label: 'Governance-Only (API reads)', confidence: 'medium', detail: '' };
+    return { pattern: 3, label: 'Web Services (pending API assessment)', confidence: 'low', detail: '' };
+  }
+  if (a.canExportCsv === true) return { pattern: 2, label: 'Flat File / CSV', confidence: 'high', detail: '' };
+  if (a.canExportCsv === false && a.hasApi === false) return { pattern: 4, label: 'Governance-Only (custom extraction)', confidence: 'low', detail: '' };
+  return null;
+}
+
+function deriveFileDelivery(a) {
+  if (!a._derived.spPattern || a._derived.spPattern.pattern !== 2) return null;
+  if (a.hasApi === true && (a.apiType === 'rest' || a.apiType === 'soap')) {
+    return { pattern: 'A', label: 'MuleSoft API Integration', note: 'App has API; MuleSoft can pull data' };
+  }
+  if (a.fileDeliveryMethod === 'sftp' || a.fileDeliveryMethod === 'networkShare') {
+    if (a.hasApi === true) return { pattern: 'C', label: 'MuleSoft + GoAnywhere Combined', note: '' };
+    return { pattern: 'B', label: 'GoAnywhere MFT', note: 'File-based pickup' };
+  }
+  if (a.csvExportMethod === 'dbQuery') return { pattern: 'D', label: 'Database Direct Export', note: '' };
+  if (a.deploymentType === 'mainframe') return { pattern: 'F', label: 'Mainframe (JCL/REXX)', note: '' };
+  if (a.fileDeliveryMethod === 'manual' || a.csvExportMethod === 'builtIn' || a.csvExportMethod === 'adminCopy') {
+    return { pattern: 'E', label: 'Manual Fallback', note: 'Admin UI export or spreadsheet' };
+  }
+  return { pattern: '?', label: 'Requires investigation', note: '' };
+}
+
+function deriveCyberArk(a) {
+  if (a.hasPrivilegedAccounts !== true) return null;
+  const hla = a.hla;
+  const score = [hla.modifySecurity, hla.manageUsers, hla.sensitiveData, hla.serviceAccount, hla.impact100, hla.infra].filter(v => v === true).length;
+  let priority, tier;
+  if (score >= 5 || hla.infra === true) { priority = 'P0'; tier = 0; }
+  else if (score >= 3) { priority = 'P1'; tier = 1; }
+  else if (score >= 2) { priority = 'P2'; tier = 2; }
+  else { priority = 'P3'; tier = 3; }
+
+  const known = a.knownAppMatch ? KNOWN_APPS[a.knownAppMatch] : null;
+  let cpm, psm;
+  if (a.canChangePasswordViaApi === true) {
+    cpm = (known && known.ca.cpm) ? 'Built-in (Marketplace)' : 'REST API Framework';
+  } else if (a.canChangePasswordViaApi === false) {
+    cpm = (a.adminAuthMethod === 'certificate' || a.adminAuthMethod === 'sshKey') ? 'Vault-Only' : 'Manual Rotation';
+  } else { cpm = 'Requires investigation'; }
+
+  const access = a.adminAccessMethods;
+  if (access.includes('browser')) {
+    psm = (known && known.ca.psm) ? 'Built-in WebFormFields (Marketplace)' : 'WebFormFields (custom)';
+  } else if (access.includes('rdp')) { psm = 'Built-in RDP'; }
+  else if (access.includes('ssh')) { psm = 'Built-in SSH'; }
+  else if (access.includes('thickClient')) { psm = 'AutoIt (custom connector)'; }
+  else { psm = 'N/A'; }
+
+  const effortMap = { 'Built-in RDP': '0', 'Built-in SSH': '0', 'Built-in WebFormFields (Marketplace)': '1-2',
+    'WebFormFields (custom)': '2-3', 'AutoIt (custom connector)': '3-7' };
+  const effort = effortMap[psm] || 'TBD';
+
+  return { priority, tier, score, cpm, psm, effort, marketplace: known ? known.ca.marketplace : a.cyberarkMarketplace };
+}
+
+function deriveOktaMigration(a) {
+  if (!a.currentIdp && a.loginMethod !== 'sso') return null;
+  if (a.migrationTarget !== 'moveEntra' && a.migrationTarget !== 'both') {
+    return { target: a.migrationTarget || a.currentIdp, gaps: [], wave: 'N/A', entraEquiv: '' };
+  }
+  const gaps = [];
+  let entraEquiv = '';
+  const mode = a.oktaSignOnMode;
+  if (mode === 'saml') {
+    entraEquiv = 'Enterprise Application (SAML SSO)';
+    gaps.push('Conditional Access policies must be recreated');
+    gaps.push('Per-app email domain routing not supported natively in Entra');
+  } else if (mode === 'oidc') {
+    entraEquiv = 'App Registration (OIDC)';
+    gaps.push('Redirect URIs must be re-registered');
+    gaps.push('Token lifetime policies differ from Okta');
+  } else if (mode === 'swa') {
+    entraEquiv = 'Enterprise App (Password-based SSO)';
+    gaps.push('SWA to Password-based SSO: different field capture mechanism');
+    gaps.push('My Apps browser extension required');
+  } else if (mode === 'bookmark') {
+    entraEquiv = 'MyApps linked app (custom tile)';
+    gaps.push('Minimal migration -- recreate bookmark link');
+  } else {
+    entraEquiv = 'Requires investigation';
+  }
+  if (a.hasScimProvisioning === true) {
+    gaps.push('SCIM attribute mapping must be reconfigured (syntax differs)');
+  }
+  let wave;
+  if (mode === 'bookmark') wave = 1;
+  else if (gaps.length <= 2 && mode === 'saml') wave = 1;
+  else if (gaps.length <= 3) wave = 2;
+  else wave = 3;
+  return { target: 'Entra ID', entraEquiv, gaps, wave, gapCount: gaps.length };
+}
+
+function computeCompletion(a) {
+  let filled = 0, total = 0;
+  const check = (v) => { total++; if (v !== '' && v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0)) filled++; };
+  check(a.appName); check(a.appUrl); check(a.vendor); check(a.deploymentType);
+  check(a.estimatedUsers); check(a.appOwnerName); check(a.appOwnerEmail);
+  check(a.loginMethod); check(a.authProtocol);
+  check(a.hasRoles); check(a.hasPrivilegedAccounts);
+  check(a.hasApi); check(a.canExportCsv);
+  if (a.hasPrivilegedAccounts === true) {
+    check(a.adminAuthMethod); check(a.canChangePasswordViaApi);
+    const hlaAnswered = Object.values(a.hla).filter(v => v !== null).length;
+    total += 6; filled += hlaAnswered;
+  }
+  if (a.loginMethod === 'sso' || a.currentIdp) {
+    check(a.currentIdp); check(a.migrationTarget);
+  }
+  return total > 0 ? Math.round((filled / total) * 100) : 0;
+}
+
+/* ===== STEP VISIBILITY ===== */
+function isStepVisible(stepId) {
+  const a = app();
+  if (stepId === 5) return a.hasPrivilegedAccounts === true;
+  if (stepId === 6) return a.loginMethod === 'sso' || a.loginMethod === 'mixed' || a.identityProvider || a.currentIdp;
+  return true;
+}
+
+function visibleSteps() { return STEPS.filter(s => s.always || isStepVisible(s.id)); }
+
+/* ===== RENDER: STEP NAV ===== */
+function renderStepNav() {
+  const nav = $('#step-nav');
+  const vis = visibleSteps();
+  const a = app();
+  nav.innerHTML = vis.map(s => {
+    const active = a._step === s.id ? ' active' : '';
+    const completed = isStepCompleted(s.id) ? ' completed' : '';
+    return '<button class="step-pill' + active + completed + '" onclick="IAM.goToStep(' + s.id + ')">' +
+      '<span class="step-num">' + s.id + '</span>' + esc(s.label) + '</button>';
+  }).join('');
+}
+
+function isStepCompleted(stepId) {
+  const a = app();
+  if (stepId === 1) return !!(a.appName && a.appUrl && a.deploymentType);
+  if (stepId === 2) return !!(a.loginMethod);
+  if (stepId === 3) return a.hasRoles !== null && a.hasPrivilegedAccounts !== null;
+  if (stepId === 4) return a.hasApi !== null && a.canExportCsv !== null;
+  if (stepId === 5) return Object.values(a.hla).some(v => v !== null);
+  if (stepId === 6) return !!(a.currentIdp || a.migrationTarget);
+  return false;
+}
+
+/* ===== RENDER: WIZARD STEPS ===== */
+function renderStep(stepId) {
+  const container = $('#wizard-content');
+  const step = STEPS.find(s => s.id === stepId);
+  if (!step) return;
+  const a = app();
+  a._step = stepId;
+
+  let content = '<div class="step-content"><div class="wizard-card">' +
+    '<h2>' + esc(step.title) + '</h2>' +
+    '<p class="step-desc">' + esc(step.desc) + '</p>';
+
+  switch (stepId) {
+    case 1: content += renderStep1(); break;
+    case 2: content += renderStep2(); break;
+    case 3: content += renderStep3(); break;
+    case 4: content += renderStep4(); break;
+    case 5: content += renderStep5(); break;
+    case 6: content += renderStep6(); break;
+    case 7: content += renderStep7(); break;
+  }
+
+  const vis = visibleSteps();
+  const idx = vis.findIndex(s => s.id === stepId);
+  const prev = idx > 0 ? vis[idx - 1].id : null;
+  const next = idx < vis.length - 1 ? vis[idx + 1].id : null;
+
+  content += '<div class="wizard-nav">';
+  content += prev !== null ? '<button class="btn btn-outline" onclick="IAM.goToStep(' + prev + ')">Back</button>' : '<div></div>';
+  content += next !== null ? '<button class="btn btn-primary" onclick="IAM.goToStep(' + next + ')">Continue</button>'
+    : '<button class="btn btn-accent" onclick="IAM.addApp()">+ Add Another Application</button>';
+  content += '</div></div></div>';
+
+  container.innerHTML = content;
+  renderStepNav();
+  updateProgress();
+  saveSession();
+}
+
+/* ===== STEP 1: APPLICATION IDENTITY ===== */
+function renderStep1() {
+  const a = app();
+  const prefill = a.knownAppMatch ? ' prefilled' : '';
+  let h = '';
+  h += '<button class="btn btn-sm btn-outline" style="margin-bottom:16px;" onclick="IAM.showModal(\'catalog-modal\')">Select from Known App Catalog</button>';
+  if (a.knownAppMatch) {
+    h += '<div class="callout callout-success"><strong>Pre-filled from: ' + esc(a.knownAppMatch) + '</strong>Review and adjust any values that differ for your environment.</div>';
+  }
+  h += '<div class="inline-group">';
+  h += formInput('appName', 'Application Name', 'text', 'e.g., ServiceNow, PEP+, Custom HR Portal', true);
+  h += formInput('appUrl', 'Application URL', 'url', 'e.g., https://acme.service-now.com', true);
+  h += '</div>';
+  h += '<div class="inline-group">';
+  h += formInput('vendor', 'Vendor / Publisher', 'text', 'e.g., ServiceNow, Fiserv, In-house');
+  h += formSelect('deploymentType', 'Deployment Type', [
+    { v: '', l: '-- Select --' }, { v: 'saas', l: 'SaaS (Cloud-hosted by vendor)' },
+    { v: 'onprem', l: 'On-premises (your data center)' }, { v: 'iaas', l: 'IaaS-hosted (your cloud, e.g., AWS/Azure VM)' },
+    { v: 'hybrid', l: 'Hybrid (both cloud and on-prem)' }
+  ], true);
+  h += '</div>';
+  h += '<div class="inline-group">';
+  h += formSelect('estimatedUsers', 'Estimated User Count', [
+    { v: '', l: '-- Select --' }, { v: '<50', l: 'Under 50' }, { v: '50-500', l: '50 - 500' },
+    { v: '500-5000', l: '500 - 5,000' }, { v: '5000+', l: '5,000+' }
+  ]);
+  h += '</div>';
+  h += '<div class="inline-group">';
+  h += formInput('appOwnerName', 'Application Owner (Name)', 'text', 'e.g., Jane Smith');
+  h += formInput('appOwnerEmail', 'Application Owner (Email)', 'email', 'e.g., jane.smith@company.com');
+  h += '</div>';
+  h += formTextarea('description', 'Brief Description (optional)', 'What does this application do? Who uses it?');
+  return h;
+}
+
+/* ===== STEP 2: HOW USERS LOG IN ===== */
+function renderStep2() {
+  const a = app();
+  let h = '';
+  h += '<div class="form-group">';
+  h += '<label>When a user goes to log into your app, what happens?</label>';
+  h += '<div class="radio-group">';
+  h += radioOption('loginMethod', 'local', 'Direct login page',
+    'They type a username and password directly on the app\'s own login page');
+  h += radioOption('loginMethod', 'sso', 'Redirected to company login',
+    'They get redirected to a company login page (like Okta or Microsoft) before accessing the app');
+  h += radioOption('loginMethod', 'iwa', 'Automatic sign-in from desktop',
+    'They never see a separate login page -- the app recognizes them from their Windows desktop session');
+  h += radioOption('loginMethod', 'mixed', 'Multiple methods available',
+    'Different users might log in different ways, or the app supports both local and SSO');
+  h += radioOption('loginMethod', 'unknown', 'Not sure',
+    'I am not sure how the login process works');
+  h += '</div></div>';
+
+  if (a.loginMethod === 'sso' || a.loginMethod === 'mixed') {
+    h += '<div class="form-group">';
+    h += '<label>Which identity provider handles the login?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('identityProvider', 'okta', 'Okta', 'Login page is hosted by Okta (*.okta.com)');
+    h += radioOption('identityProvider', 'entraId', 'Microsoft Entra ID', 'Login page is hosted by Microsoft (login.microsoftonline.com)');
+    h += radioOption('identityProvider', 'other', 'Other', 'A different identity provider');
+    h += radioOption('identityProvider', 'unknown', 'Not sure', 'I don\'t know which system handles the redirect');
+    h += '</div></div>';
+  }
+
+  if (a.loginMethod === 'sso' && (a.identityProvider === 'okta' || a.identityProvider === 'entraId')) {
+    h += '<div class="form-group">';
+    h += '<label>Do you know the sign-on protocol?</label>';
+    h += '<p class="hint">This is usually visible in the Okta admin console or Azure portal for this app.</p>';
+    h += '<div class="radio-group">';
+    h += radioOption('authProtocol', 'saml', 'SAML', 'Security Assertion Markup Language -- the most common SSO protocol');
+    h += radioOption('authProtocol', 'oidc', 'OIDC / OAuth', 'OpenID Connect -- a newer protocol common with APIs');
+    h += radioOption('authProtocol', 'unknown', 'Not sure', '');
+    h += '</div></div>';
+  }
+
+  if (a.loginMethod === 'unknown') {
+    h += '<div class="fallback-container visible">';
+    h += '<div class="fallback-intro">Let us try a different way to figure this out.</div>';
+    h += '<div class="form-group">';
+    h += '<label>When you go to your app\'s website, what do you see first?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('loginMethod', 'local', 'A username and password form on the app\'s own page',
+      'The login form is on the same website as the app');
+    h += radioOption('loginMethod', 'sso', 'I get sent to a different website to sign in',
+      'The URL changes to something like okta.com or login.microsoftonline.com');
+    h += radioOption('loginMethod', 'iwa', 'I am already logged in when I open the page',
+      'No login screen appears -- it just works from my work computer');
+    h += '</div></div></div>';
+  }
+
+  h += '<div class="form-group" style="margin-top:20px;">';
+  h += '<label>Does the app require multi-factor authentication (MFA)?</label>';
+  h += '<p class="hint">MFA is an extra step after your password -- like a code from an app, a push notification, or a text message.</p>';
+  h += '<div class="radio-group">';
+  h += radioOption('hasMfa', true, 'Yes', 'MFA is required');
+  h += radioOption('hasMfa', false, 'No', 'No MFA required');
+  h += radioOption('hasMfa', null, 'Not sure', '');
+  h += '</div></div>';
+
+  if (a.hasMfa === true) {
+    h += '<div class="form-group">';
+    h += '<label>What type of MFA? (select all that apply)</label>';
+    h += '<div class="checkbox-group">';
+    h += checkboxOption('mfaTypes', 'totp', 'One-time code from an app', 'Google Authenticator, Microsoft Authenticator, Okta Verify code');
+    h += checkboxOption('mfaTypes', 'push', 'Push notification', 'A notification pops up on your phone to approve');
+    h += checkboxOption('mfaTypes', 'sms', 'SMS text message', 'A code is sent to your phone via text');
+    h += checkboxOption('mfaTypes', 'hardware', 'Hardware token', 'YubiKey, RSA token, or similar physical device');
+    h += checkboxOption('mfaTypes', 'email', 'Email code', 'A code is sent to your email');
+    h += checkboxOption('mfaTypes', 'certificate', 'Certificate / smart card', 'PIV card, CAC, or client certificate');
+    h += '</div></div>';
+  }
+
+  h += '<div style="margin-top:20px;">';
+  h += '<button class="btn btn-sm btn-outline" onclick="IAM.showModal(\'bookmarklet-modal\')">';
+  h += 'Analyze Login Page (optional)</button>';
+  h += '<span style="font-size:.8rem;color:var(--text-muted);margin-left:8px;">Auto-detect login method from your app\'s login page</span>';
+  h += '</div>';
+
+  if (a.loginAnalysis) {
+    h += '<div class="callout callout-success" style="margin-top:12px;">';
+    h += '<strong>Login analysis applied</strong>';
+    h += 'Detected: ' + esc(a.loginAnalysis._summary || 'See summary panel');
+    h += '</div>';
+  }
+
+  return h;
+}
+
+/* ===== STEP 3: ACCESS & PERMISSIONS ===== */
+function renderStep3() {
+  const a = app();
+  let h = '';
+
+  h += '<div class="form-group">';
+  h += '<label>Does the app have different roles or permission levels?</label>';
+  h += '<p class="hint">For example: Admin, User, Read-Only, Manager, Approver, etc.</p>';
+  h += '<div class="radio-group">';
+  h += radioOption('hasRoles', true, 'Yes', 'The app has defined roles or permission groups');
+  h += radioOption('hasRoles', false, 'No', 'Everyone has the same level of access');
+  h += radioOption('hasRoles', null, 'Not sure', '');
+  h += '</div></div>';
+
+  if (a.hasRoles === true) {
+    h += '<div class="form-group">';
+    h += '<label>List the roles you know about</label>';
+    h += '<p class="hint">Add as many as you know. You can estimate the user count.</p>';
+    h += '<div class="role-list" id="role-list">';
+    if (a.roles.length === 0 && a.knownAppMatch && KNOWN_APPS[a.knownAppMatch]) {
+      const defaults = KNOWN_APPS[a.knownAppMatch].roles || [];
+      defaults.forEach(r => a.roles.push({ name: r, description: '', riskLevel: 'low', userCount: '' }));
+    }
+    a.roles.forEach((r, i) => { h += renderRoleEntry(i, r); });
+    h += '</div>';
+    h += '<button class="btn btn-sm btn-outline" style="margin-top:8px;" onclick="IAM.addRole()">+ Add Role</button>';
+    h += '</div>';
+  }
+
+  if (a.hasRoles === null) {
+    h += '<div class="fallback-container visible">';
+    h += '<div class="fallback-intro">Let us ask this differently.</div>';
+    h += '<div class="form-group">';
+    h += '<label>Can some people do things in the app that others cannot?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('hasRoles', true, 'Yes', 'Some users can do more than others');
+    h += radioOption('hasRoles', false, 'No', 'Everyone can do the same things');
+    h += '</div></div></div>';
+  }
+
+  h += '<div class="form-group" style="margin-top:20px;">';
+  h += '<label>Are there admin or privileged accounts?</label>';
+  h += '<p class="hint">Accounts that can manage users, change settings, view all data, or perform administrative tasks.</p>';
+  h += '<div class="radio-group">';
+  h += radioOption('hasPrivilegedAccounts', true, 'Yes', 'There are admin/privileged accounts');
+  h += radioOption('hasPrivilegedAccounts', false, 'No', 'No privileged accounts');
+  h += radioOption('hasPrivilegedAccounts', null, 'Not sure', '');
+  h += '</div></div>';
+
+  if (a.hasPrivilegedAccounts === null) {
+    h += '<div class="fallback-container visible">';
+    h += '<div class="fallback-intro">Let us try asking this differently.</div>';
+    h += '<div class="form-group">';
+    h += '<label>Is there at least one account that can create other users, change security settings, or view all data?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('hasPrivilegedAccounts', true, 'Yes', '');
+    h += radioOption('hasPrivilegedAccounts', false, 'No', '');
+    h += '</div></div></div>';
+  }
+
+  if (a.hasPrivilegedAccounts === true) {
+    h += '<div class="form-group">';
+    h += formInput('adminAccountCount', 'How many admin/privileged accounts?', 'number', 'e.g., 3');
+    h += '</div>';
+
+    h += '<div class="form-group">';
+    h += '<label>What types of admin accounts exist? (select all that apply)</label>';
+    h += '<div class="checkbox-group">';
+    h += checkboxOption('adminAccountTypes', 'human', 'Human administrators', 'Real people who log in to administer the app');
+    h += checkboxOption('adminAccountTypes', 'service', 'Service accounts', 'Automated accounts used by other systems to connect');
+    h += checkboxOption('adminAccountTypes', 'api', 'API / integration accounts', 'Accounts or tokens used for API access');
+    h += checkboxOption('adminAccountTypes', 'shared', 'Shared accounts', 'A single account used by multiple people');
+    h += '</div></div>';
+
+    h += '<div class="form-group">';
+    h += '<label>How do admins access the app? (select all that apply)</label>';
+    h += '<div class="checkbox-group">';
+    h += checkboxOption('adminAccessMethods', 'browser', 'Web browser', 'Admin uses a web browser to access the admin interface');
+    h += checkboxOption('adminAccessMethods', 'rdp', 'Remote Desktop (RDP)', 'Admin connects via RDP to a server');
+    h += checkboxOption('adminAccessMethods', 'ssh', 'SSH / Terminal', 'Admin uses a command-line terminal connection');
+    h += checkboxOption('adminAccessMethods', 'thickClient', 'Thick client application', 'Admin uses a desktop application installed on their computer');
+    h += '</div></div>';
+  }
+
+  return h;
+}
+
+/* ===== STEP 4: SAILPOINT ===== */
+function renderStep4() {
+  const a = app();
+  let h = '';
+
+  h += '<div class="form-group">';
+  h += '<label>Does the app have an API for managing users?</label>';
+  h += '<p class="hint">A REST API, SOAP API, or GraphQL API that allows programmatic user management.</p>';
+  h += '<div class="radio-group">';
+  h += radioOption('hasApi', true, 'Yes', 'The app has an API');
+  h += radioOption('hasApi', false, 'No', 'No API available');
+  h += radioOption('hasApi', null, 'Not sure', '');
+  h += '</div></div>';
+
+  if (a.hasApi === null) {
+    h += '<div class="fallback-container visible">';
+    h += '<div class="fallback-intro">Let us try asking this differently.</div>';
+    h += '<div class="form-group">';
+    h += '<label>Does your app have developer documentation or a way to manage users programmatically (without clicking through the UI)?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('hasApi', true, 'Yes, there is developer/API documentation', '');
+    h += radioOption('hasApi', false, 'No, user management is only through the UI', '');
+    h += '</div></div></div>';
+  }
+
+  if (a.hasApi === true) {
+    h += formSelect('apiType', 'API Type', [
+      { v: '', l: '-- Select --' }, { v: 'rest', l: 'REST API' }, { v: 'soap', l: 'SOAP API' },
+      { v: 'graphql', l: 'GraphQL' }, { v: 'other', l: 'Other' }
+    ]);
+    h += '<div class="form-group">';
+    h += '<label>Can the API create, update, and delete user accounts?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('apiSupportsWrite', true, 'Yes', 'Full create/update/delete via API');
+    h += radioOption('apiSupportsWrite', false, 'No, read-only', 'The API can only list users, not modify them');
+    h += radioOption('apiSupportsWrite', null, 'Not sure', '');
+    h += '</div></div>';
+  }
+
+  h += '<div class="form-group">';
+  h += '<label>Can the app export a list of all users and their roles?</label>';
+  h += '<p class="hint">For example: a CSV download, a database report, or a spreadsheet export.</p>';
+  h += '<div class="radio-group">';
+  h += radioOption('canExportCsv', true, 'Yes', 'Users and roles can be exported');
+  h += radioOption('canExportCsv', false, 'No', 'There is no way to export user data');
+  h += radioOption('canExportCsv', null, 'Not sure', '');
+  h += '</div></div>';
+
+  if (a.canExportCsv === null) {
+    h += '<div class="fallback-container visible">';
+    h += '<div class="fallback-intro">Let us try asking this differently.</div>';
+    h += '<div class="form-group">';
+    h += '<label>Can an admin go to a user management page and download a list of all users?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('canExportCsv', true, 'Yes, there is a download/export button', '');
+    h += radioOption('canExportCsv', false, 'No, you can only see users one at a time', '');
+    h += '</div></div></div>';
+  }
+
+  if (a.canExportCsv === true) {
+    h += formSelect('csvExportMethod', 'How is the export done?', [
+      { v: '', l: '-- Select --' }, { v: 'builtIn', l: 'Built-in export/download button' },
+      { v: 'dbQuery', l: 'Database query or report' }, { v: 'adminCopy', l: 'Admin copies from UI / screenshots' },
+      { v: 'other', l: 'Other method' }
+    ]);
+    h += formSelect('fileDeliveryMethod', 'Can files be delivered automatically?', [
+      { v: '', l: '-- Select --' }, { v: 'sftp', l: 'SFTP / secure file transfer' },
+      { v: 'networkShare', l: 'Network file share (UNC path)' }, { v: 'api', l: 'Via API call' },
+      { v: 'manual', l: 'Manual only (someone has to click export)' }, { v: 'unknown', l: 'Not sure' }
+    ]);
+  }
+
+  h += '<div class="form-group">';
+  h += '<label>Does the app connect to Active Directory or LDAP for user authentication?</label>';
+  h += '<div class="radio-group">';
+  h += radioOption('hasAdIntegration', true, 'Yes', 'Users authenticate via AD/LDAP');
+  h += radioOption('hasAdIntegration', false, 'No', 'The app manages its own user directory');
+  h += radioOption('hasAdIntegration', null, 'Not sure', '');
+  h += '</div></div>';
+
+  h += '<div class="form-group">';
+  h += '<label>Can your app provide these data fields for each user account?</label>';
+  h += '<p class="hint">Check all fields your app can include in an export. Fields marked "v2" are optional enhancements.</p>';
+  h += '<div class="field-checklist">';
+  h += fieldCheck('v2Fields.accountType', 'Account Type', 'v2', 'standard, admin, service, shared');
+  h += fieldCheck('v2Fields.created', 'Creation Date', 'v2', 'When the account was created');
+  h += fieldCheck('v2Fields.lastLogin', 'Last Login', 'v2', 'When the user last signed in');
+  h += fieldCheck('v2Fields.entOwner', 'Entitlement Owner', 'v2', 'Who owns each role/permission');
+  h += fieldCheck('v2Fields.entType', 'Entitlement Type', 'v2', 'role, group, permission, license');
+  h += fieldCheck('v2Fields.entRisk', 'Entitlement Risk Level', 'v2', 'low, medium, high, critical');
+  h += '</div></div>';
+
+  if (a._derived.spPattern) {
+    h += '<div class="derived-result">';
+    h += '<h4>Recommended SailPoint Integration</h4>';
+    h += '<div class="dr-row"><span class="dr-label">Integration Pattern</span><span class="dr-value">' + esc(a._derived.spPattern.label) + '</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">Confidence</span><span class="dr-value">' + esc(a._derived.spPattern.confidence) + '</span></div>';
+    if (a._derived.spPattern.detail) {
+      h += '<div class="dr-row"><span class="dr-label">Details</span><span class="dr-value">' + esc(a._derived.spPattern.detail) + '</span></div>';
+    }
+    if (a._derived.spDelivery) {
+      h += '<div class="dr-row"><span class="dr-label">File Delivery</span><span class="dr-value">Pattern ' + esc(a._derived.spDelivery.pattern) + ': ' + esc(a._derived.spDelivery.label) + '</span></div>';
+    }
+    h += '</div>';
+  }
+
+  return h;
+}
+
+/* ===== STEP 5: CYBERARK ===== */
+function renderStep5() {
+  const a = app();
+  let h = '';
+
+  h += '<div class="callout callout-info"><strong>Privileged Account Assessment</strong>';
+  h += 'Answer these questions about your admin/privileged accounts. This helps determine the security priority and the best way to protect them.</div>';
+
+  h += '<div class="form-group">';
+  h += '<label>About the privileged accounts in this app:</label>';
+  h += '<div class="hla-grid">';
+  h += hlaItem('hla.modifySecurity', 'Can this account modify security settings or audit logs?');
+  h += hlaItem('hla.manageUsers', 'Can this account create, delete, or modify other users?');
+  h += hlaItem('hla.sensitiveData', 'Does this account have access to sensitive data (PII, financial, health)?');
+  h += hlaItem('hla.serviceAccount', 'Is this a service account used for system-to-system integration?');
+  h += hlaItem('hla.impact100', 'Could compromise of this account affect more than 100 users?');
+  h += hlaItem('hla.infra', 'Does this account manage infrastructure (servers, databases, cloud resources)?');
+  h += '</div></div>';
+
+  h += formSelect('adminAuthMethod', 'How do admins authenticate to this app?', [
+    { v: '', l: '-- Select --' }, { v: 'localPassword', l: 'Username and password (local to the app)' },
+    { v: 'apiToken', l: 'API token or key' }, { v: 'oauth', l: 'OAuth / client credentials' },
+    { v: 'certificate', l: 'Certificate / mutual TLS' }, { v: 'sshKey', l: 'SSH key' },
+    { v: 'adKerberos', l: 'Active Directory / domain account' }, { v: 'samlSso', l: 'SSO pass-through (SAML/OIDC)' }
+  ], true);
+
+  h += '<div class="form-group">';
+  h += '<label>Can the admin password be changed via API?</label>';
+  h += '<p class="hint">For example: a REST endpoint to reset or rotate the password without logging into the UI.</p>';
+  h += '<div class="radio-group">';
+  h += radioOption('canChangePasswordViaApi', true, 'Yes', 'Password can be changed programmatically');
+  h += radioOption('canChangePasswordViaApi', false, 'No', 'Password must be changed manually in the UI');
+  h += radioOption('canChangePasswordViaApi', null, 'Not sure', '');
+  h += '</div></div>';
+
+  if (a.canChangePasswordViaApi === null) {
+    h += '<div class="fallback-container visible">';
+    h += '<div class="fallback-intro">Let us rephrase that.</div>';
+    h += '<div class="form-group">';
+    h += '<label>Is there a way to reset the admin password without logging into the app\'s UI manually?</label>';
+    h += '<div class="radio-group">';
+    h += radioOption('canChangePasswordViaApi', true, 'Yes', '');
+    h += radioOption('canChangePasswordViaApi', false, 'No, you must log in to change it', '');
+    h += '</div></div></div>';
+  }
+
+  h += '<div class="form-group">';
+  h += '<label>Is MFA required for admin access?</label>';
+  h += '<div class="radio-group">';
+  h += radioOption('adminMfaRequired', true, 'Yes', '');
+  h += radioOption('adminMfaRequired', false, 'No', '');
+  h += '</div></div>';
+
+  if (a.adminMfaRequired === true) {
+    h += formSelect('adminMfaType', 'What type of MFA for admin accounts?', [
+      { v: '', l: '-- Select --' }, { v: 'totp', l: 'One-time code app (Authenticator)' },
+      { v: 'push', l: 'Push notification' }, { v: 'sms', l: 'SMS / text message' },
+      { v: 'hardware', l: 'Hardware token (YubiKey, RSA)' }, { v: 'email', l: 'Email code' },
+      { v: 'certificate', l: 'Certificate / smart card' }
+    ]);
+  }
+
+  if (a._derived.caClass) {
+    const ca = a._derived.caClass;
+    h += '<div class="derived-result">';
+    h += '<h4>CyberArk Assessment</h4>';
+    h += '<div class="dr-row"><span class="dr-label">HLA Priority</span><span class="dr-value"><span class="badge badge-' + (ca.tier <= 1 ? 'danger' : ca.tier === 2 ? 'warning' : 'info') + '">' + esc(ca.priority) + '</span> Tier ' + ca.tier + '</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">HLA Score</span><span class="dr-value">' + ca.score + ' / 6</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">CPM Approach</span><span class="dr-value">' + esc(ca.cpm) + '</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">PSM Approach</span><span class="dr-value">' + esc(ca.psm) + '</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">Estimated Effort</span><span class="dr-value">' + esc(ca.effort) + ' days</span></div>';
+    if (ca.marketplace) {
+      h += '<div class="callout callout-success" style="margin-top:8px;"><strong>Marketplace Connector Available</strong>A pre-built CyberArk connector exists for this application.</div>';
+    }
+    h += '</div>';
+  }
+
+  return h;
+}
+
+/* ===== STEP 6: OKTA / ENTRA ID ===== */
+function renderStep6() {
+  const a = app();
+  let h = '';
+
+  h += formSelect('currentIdp', 'Current Identity Provider', [
+    { v: '', l: '-- Select --' }, { v: 'okta', l: 'Okta' }, { v: 'entraId', l: 'Microsoft Entra ID' },
+    { v: 'adOnly', l: 'On-premises Active Directory only' }, { v: 'other', l: 'Other' }, { v: 'none', l: 'None (local auth only)' }
+  ], true);
+
+  if (a.currentIdp === 'okta') {
+    h += formSelect('oktaSignOnMode', 'Okta Sign-On Mode', [
+      { v: '', l: '-- Select --' }, { v: 'saml', l: 'SAML 2.0' }, { v: 'oidc', l: 'OIDC (OpenID Connect)' },
+      { v: 'swa', l: 'SWA (Secure Web Authentication / password autofill)' },
+      { v: 'bookmark', l: 'Bookmark (link only, no SSO)' }, { v: 'unknown', l: 'Not sure' }
+    ]);
+
+    if (a.oktaSignOnMode === 'unknown') {
+      h += '<div class="fallback-container visible">';
+      h += '<div class="fallback-intro">Let us figure out the sign-on mode.</div>';
+      h += '<div class="form-group">';
+      h += '<label>When you click the app in your Okta dashboard, what happens?</label>';
+      h += '<div class="radio-group">';
+      h += radioOption('oktaSignOnMode', 'saml', 'I\'m automatically signed into the app', 'This is typically SAML or OIDC');
+      h += radioOption('oktaSignOnMode', 'swa', 'Okta fills in a username and password for me', 'This is SWA (Secure Web Authentication)');
+      h += radioOption('oktaSignOnMode', 'bookmark', 'It just opens a web link', 'This is a Bookmark app');
+      h += '</div></div></div>';
+    }
+
+    h += '<div class="form-group">';
+    h += '<label>Is SCIM provisioning configured for this app in Okta?</label>';
+    h += '<p class="hint">SCIM automatically creates/updates/deactivates user accounts when changes happen in Okta.</p>';
+    h += '<div class="radio-group">';
+    h += radioOption('hasScimProvisioning', true, 'Yes', 'User provisioning is automated via SCIM');
+    h += radioOption('hasScimProvisioning', false, 'No', 'User accounts are managed manually in the app');
+    h += radioOption('hasScimProvisioning', null, 'Not sure', '');
+    h += '</div></div>';
+
+    h += formInput('oktaAppLabel', 'Okta App Label (optional)', 'text', 'The display name of this app in Okta');
+  }
+
+  h += formSelect('migrationTarget', 'Migration Plan', [
+    { v: '', l: '-- Select --' }, { v: 'stayOkta', l: 'Staying in Okta' },
+    { v: 'moveEntra', l: 'Moving to Entra ID' }, { v: 'both', l: 'Both (dual IdP during transition)' },
+    { v: 'notDecided', l: 'Not yet decided' }
+  ]);
+
+  if (a._derived.oktaMigration && (a.migrationTarget === 'moveEntra' || a.migrationTarget === 'both')) {
+    const mig = a._derived.oktaMigration;
+    h += '<div class="derived-result">';
+    h += '<h4>Entra ID Migration Assessment</h4>';
+    h += '<div class="dr-row"><span class="dr-label">Entra Configuration</span><span class="dr-value">' + esc(mig.entraEquiv) + '</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">Migration Wave</span><span class="dr-value">Wave ' + mig.wave + '</span></div>';
+    h += '<div class="dr-row"><span class="dr-label">Known Gaps</span><span class="dr-value">' + mig.gapCount + ' identified</span></div>';
+    h += '</div>';
+    if (mig.gaps.length > 0) {
+      h += '<div class="gap-list">';
+      mig.gaps.forEach(g => { h += '<div class="gap-item">' + esc(g) + '</div>'; });
+      h += '</div>';
+    }
+  }
+
+  return h;
+}
+
+/* ===== STEP 7: REVIEW & EXPORT ===== */
+function renderStep7() {
+  const a = app();
+  let h = '';
+
+  const validations = getValidations(a);
+  if (validations.length > 0) {
+    h += '<ul class="validation-list">';
+    validations.forEach(v => {
+      h += '<li class="v-' + v.type + '">' + esc(v.message) + '</li>';
+    });
+    h += '</ul>';
+  } else {
+    h += '<div class="callout callout-success"><strong>All required fields completed</strong>Your application data is ready to export.</div>';
+  }
+
+  h += '<div class="review-section"><h3>Application Identity</h3><div class="review-grid">';
+  h += reviewItem('Name', a.appName);
+  h += reviewItem('URL', a.appUrl);
+  h += reviewItem('Vendor', a.vendor);
+  h += reviewItem('Deployment', a.deploymentType);
+  h += reviewItem('Users', a.estimatedUsers);
+  h += reviewItem('Owner', a.appOwnerName);
+  h += '</div></div>';
+
+  h += '<div class="review-section"><h3>Authentication</h3><div class="review-grid">';
+  h += reviewItem('Login Method', { local:'Direct login', sso:'SSO/Federated', iwa:'Windows integrated', mixed:'Multiple methods' }[a.loginMethod] || a.loginMethod);
+  h += reviewItem('Identity Provider', a.identityProvider || a.currentIdp);
+  h += reviewItem('Auth Protocol', a.authProtocol);
+  h += reviewItem('MFA', a.hasMfa === true ? 'Yes (' + a.mfaTypes.join(', ') + ')' : a.hasMfa === false ? 'No' : '');
+  h += '</div></div>';
+
+  if (a._derived.spPattern) {
+    h += '<div class="review-section"><h3>SailPoint Governance</h3><div class="review-grid">';
+    h += reviewItem('Integration Pattern', a._derived.spPattern.label);
+    h += reviewItem('Confidence', a._derived.spPattern.confidence);
+    if (a._derived.spDelivery) h += reviewItem('File Delivery', 'Pattern ' + a._derived.spDelivery.pattern + ': ' + a._derived.spDelivery.label);
+    h += reviewItem('Has API', a.hasApi === true ? 'Yes (' + a.apiType + ')' : a.hasApi === false ? 'No' : '');
+    h += reviewItem('Can Export CSV', a.canExportCsv === true ? 'Yes' : a.canExportCsv === false ? 'No' : '');
+    h += '</div></div>';
+  }
+
+  if (a._derived.caClass) {
+    const ca = a._derived.caClass;
+    h += '<div class="review-section"><h3>CyberArk Privileged Access</h3><div class="review-grid">';
+    h += reviewItem('HLA Priority', ca.priority + ' / Tier ' + ca.tier);
+    h += reviewItem('HLA Score', ca.score + ' / 6');
+    h += reviewItem('CPM Approach', ca.cpm);
+    h += reviewItem('PSM Approach', ca.psm);
+    h += reviewItem('Marketplace', ca.marketplace ? 'Yes' : 'No');
+    h += reviewItem('Est. Effort', ca.effort + ' days');
+    h += '</div></div>';
+  }
+
+  if (a._derived.oktaMigration && a._derived.oktaMigration.target) {
+    const mig = a._derived.oktaMigration;
+    h += '<div class="review-section"><h3>Okta / Entra ID</h3><div class="review-grid">';
+    h += reviewItem('Current IdP', a.currentIdp);
+    if (a.currentIdp === 'okta') {
+      h += reviewItem('Sign-On Mode', a.oktaSignOnMode);
+      h += reviewItem('SCIM', a.hasScimProvisioning === true ? 'Yes' : a.hasScimProvisioning === false ? 'No' : '');
+    }
+    h += reviewItem('Migration Target', a.migrationTarget);
+    if (mig.entraEquiv) h += reviewItem('Entra Config', mig.entraEquiv);
+    if (mig.wave !== 'N/A') h += reviewItem('Migration Wave', 'Wave ' + mig.wave);
+    h += reviewItem('Known Gaps', mig.gapCount || 0);
+    h += '</div></div>';
+  }
+
+  h += formTextarea('notes', 'Additional Notes', 'Any other information the IAM team should know about this application.');
+
+  h += '<div style="margin-top:20px;display:flex;gap:8px;flex-wrap:wrap;">';
+  h += '<button class="btn btn-accent" onclick="IAM.exportAllCSV()">Export All CSVs</button>';
+  h += '<button class="btn btn-primary" onclick="IAM.exportJSON()">Export JSON</button>';
+  h += '<button class="btn btn-outline" onclick="window.print()">Print</button>';
+  h += '</div>';
+
+  return h;
+}
+
+function getValidations(a) {
+  const v = [];
+  if (!a.appName) v.push({ type: 'error', message: 'Application name is required' });
+  if (!a.appUrl) v.push({ type: 'error', message: 'Application URL is required' });
+  if (!a.deploymentType) v.push({ type: 'error', message: 'Deployment type is required' });
+  if (!a.loginMethod) v.push({ type: 'warn', message: 'Login method has not been specified' });
+  if (a.hasRoles === null) v.push({ type: 'warn', message: 'Role information has not been provided' });
+  if (a.hasPrivilegedAccounts === null) v.push({ type: 'warn', message: 'Privileged account status is unknown' });
+  if (a.hasApi === null) v.push({ type: 'warn', message: 'API availability has not been determined' });
+  if (a.canExportCsv === null) v.push({ type: 'warn', message: 'CSV export capability has not been determined' });
+  if (a.hasPrivilegedAccounts === true && !Object.values(a.hla).some(x => x !== null)) {
+    v.push({ type: 'warn', message: 'CyberArk HLA checklist has not been completed' });
+  }
+  if ((a.loginMethod === 'sso' || a.currentIdp) && !a.migrationTarget) {
+    v.push({ type: 'warn', message: 'Okta/Entra migration target has not been specified' });
+  }
+  return v;
+}
+
+/* ===== RENDER: SUMMARY PANEL ===== */
+function renderSummary() {
+  const body = $('#summary-body');
+  const a = app();
+  let h = '';
+
+  h += '<div class="summary-card">';
+  h += '<h4><span class="card-icon" style="background:var(--primary);">A</span>' + esc(a.appName || 'Unnamed Application') + '</h4>';
+  if (a.appUrl) h += '<div class="summary-row"><span class="row-label">URL</span><span class="row-value" style="font-size:.75rem;">' + esc(a.appUrl) + '</span></div>';
+  if (a.deploymentType) h += '<div class="summary-row"><span class="row-label">Type</span><span class="row-value">' + esc(a.deploymentType.toUpperCase()) + '</span></div>';
+  if (a.estimatedUsers) h += '<div class="summary-row"><span class="row-label">Users</span><span class="row-value">' + esc(a.estimatedUsers) + '</span></div>';
+  h += '</div>';
+
+  // SailPoint card
+  h += '<div class="summary-card">';
+  h += '<h4><span class="card-icon icon-sp">SP</span>SailPoint Governance</h4>';
+  if (a._derived.spPattern) {
+    h += '<div class="summary-row"><span class="row-label">Pattern</span><span class="row-value">' + esc(a._derived.spPattern.label) + '</span></div>';
+    h += '<div class="summary-row"><span class="row-label">Confidence</span><span class="row-value"><span class="badge badge-' + (a._derived.spPattern.confidence === 'high' ? 'success' : a._derived.spPattern.confidence === 'medium' ? 'warning' : 'neutral') + '">' + esc(a._derived.spPattern.confidence) + '</span></span></div>';
+    if (a._derived.spDelivery) {
+      h += '<div class="summary-row"><span class="row-label">Delivery</span><span class="row-value">' + esc(a._derived.spDelivery.label) + '</span></div>';
+    }
+  } else {
+    h += '<div class="summary-empty">Complete Step 4 to see recommendation</div>';
+  }
+  h += '</div>';
+
+  // CyberArk card
+  h += '<div class="summary-card">';
+  h += '<h4><span class="card-icon icon-ca">CA</span>CyberArk Privileged Access</h4>';
+  if (a._derived.caClass) {
+    const ca = a._derived.caClass;
+    h += '<div class="summary-row"><span class="row-label">Priority</span><span class="row-value"><span class="badge badge-' + (ca.tier <= 1 ? 'danger' : ca.tier === 2 ? 'warning' : 'info') + '">' + esc(ca.priority) + '</span> Tier ' + ca.tier + '</span></div>';
+    h += '<div class="summary-row"><span class="row-label">CPM</span><span class="row-value" style="font-size:.78rem;">' + esc(ca.cpm) + '</span></div>';
+    h += '<div class="summary-row"><span class="row-label">PSM</span><span class="row-value" style="font-size:.78rem;">' + esc(ca.psm) + '</span></div>';
+    h += '<div class="summary-row"><span class="row-label">Effort</span><span class="row-value">' + esc(ca.effort) + ' days</span></div>';
+  } else if (a.hasPrivilegedAccounts === false) {
+    h += '<div class="summary-empty">No privileged accounts -- CyberArk not required</div>';
+  } else {
+    h += '<div class="summary-empty">Complete Step 5 to see assessment</div>';
+  }
+  h += '</div>';
+
+  // Okta/Entra card
+  h += '<div class="summary-card">';
+  h += '<h4><span class="card-icon icon-okta">ID</span>Okta / Entra ID</h4>';
+  if (a._derived.oktaMigration && a._derived.oktaMigration.target) {
+    const mig = a._derived.oktaMigration;
+    h += '<div class="summary-row"><span class="row-label">Current IdP</span><span class="row-value">' + esc(a.currentIdp) + '</span></div>';
+    if (a.migrationTarget) h += '<div class="summary-row"><span class="row-label">Target</span><span class="row-value">' + esc(a.migrationTarget) + '</span></div>';
+    if (mig.entraEquiv) h += '<div class="summary-row"><span class="row-label">Entra Config</span><span class="row-value" style="font-size:.75rem;">' + esc(mig.entraEquiv) + '</span></div>';
+    if (mig.wave !== 'N/A') h += '<div class="summary-row"><span class="row-label">Wave</span><span class="row-value">' + mig.wave + '</span></div>';
+    if (mig.gapCount > 0) h += '<div class="summary-row"><span class="row-label">Gaps</span><span class="row-value"><span class="badge badge-warning">' + mig.gapCount + ' identified</span></span></div>';
+  } else if (a.loginMethod && a.loginMethod !== 'sso' && a.loginMethod !== 'mixed') {
+    h += '<div class="summary-empty">No SSO detected -- may not apply</div>';
+  } else {
+    h += '<div class="summary-empty">Complete Step 6 to see assessment</div>';
+  }
+  h += '</div>';
+
+  // Login analysis card
+  if (a.loginAnalysis) {
+    h += '<div class="summary-card">';
+    h += '<h4><span class="card-icon icon-login">LA</span>Login Analysis</h4>';
+    h += '<div class="summary-row"><span class="row-label">Method</span><span class="row-value">' + esc(a.loginAnalysis.captureMethod || 'N/A') + '</span></div>';
+    if (a.loginAnalysis.detectedIdp) h += '<div class="summary-row"><span class="row-label">Detected IdP</span><span class="row-value">' + esc(a.loginAnalysis.detectedIdp) + '</span></div>';
+    if (a.loginAnalysis.authIndicator) h += '<div class="summary-row"><span class="row-label">Auth Type</span><span class="row-value">' + esc(a.loginAnalysis.authIndicator) + '</span></div>';
+    h += '</div>';
+  }
+
+  body.innerHTML = h;
+  renderAppTabs();
+  updateProgress();
+}
+
+function renderAppTabs() {
+  const tabs = $('#app-tabs');
+  if (STATE.apps.length <= 1) { tabs.innerHTML = ''; return; }
+  tabs.innerHTML = STATE.apps.map((a, i) => {
+    const active = i === STATE.activeIndex ? ' active' : '';
+    const name = a.appName || 'App ' + (i + 1);
+    return '<div class="app-tab' + active + '" onclick="IAM.switchApp(' + i + ')">' +
+      esc(name) + (STATE.apps.length > 1 ? '<span class="tab-close" onclick="event.stopPropagation();IAM.removeApp(' + i + ')">&times;</span>' : '') + '</div>';
+  }).join('');
+}
+
+function updateProgress() {
+  const pct = app()._derived.completion || 0;
+  const fill = $('#progress-fill');
+  const label = $('#progress-label');
+  if (fill) fill.style.width = pct + '%';
+  if (label) label.textContent = pct + '% complete';
+  const status = $('#export-status');
+  if (status) {
+    const total = STATE.apps.length;
+    status.textContent = total + ' application' + (total > 1 ? 's' : '') + ' | ' + pct + '% complete for current app';
+  }
+}
+
+/* ===== FORM HELPERS ===== */
+function formInput(key, label, type, placeholder, required) {
+  const val = getVal(key) || '';
+  return '<div class="form-group"><label>' + esc(label) + (required ? ' *' : '') + '</label>' +
+    '<input type="' + type + '" value="' + esc(String(val)) + '" placeholder="' + esc(placeholder || '') + '"' +
+    ' onchange="IAM.setVal(\'' + key + '\',this.value)"' +
+    (type === 'number' ? ' min="0"' : '') + '></div>';
+}
+
+function formTextarea(key, label, placeholder) {
+  const val = getVal(key) || '';
+  return '<div class="form-group"><label>' + esc(label) + '</label>' +
+    '<textarea placeholder="' + esc(placeholder || '') + '" onchange="IAM.setVal(\'' + key + '\',this.value)">' +
+    esc(val) + '</textarea></div>';
+}
+
+function formSelect(key, label, options, required) {
+  const val = getVal(key) || '';
+  let h = '<div class="form-group"><label>' + esc(label) + (required ? ' *' : '') + '</label><select onchange="IAM.setVal(\'' + key + '\',this.value);IAM.rerender()">';
+  options.forEach(o => {
+    h += '<option value="' + esc(o.v) + '"' + (val === o.v ? ' selected' : '') + '>' + esc(o.l) + '</option>';
+  });
+  h += '</select></div>';
+  return h;
+}
+
+function radioOption(key, value, label, desc) {
+  const currentVal = getVal(key);
+  const selected = currentVal === value ? ' selected' : '';
+  const valStr = typeof value === 'boolean' ? (value ? 'true' : 'false') : (value === null ? 'null' : String(value));
+  return '<label class="radio-option' + selected + '" onclick="IAM.setRadio(\'' + key + '\',' + JSON.stringify(value) + ')">' +
+    '<input type="radio" name="' + key + '"' + (currentVal === value ? ' checked' : '') + '>' +
+    '<div class="option-content"><div class="option-label">' + esc(label) + '</div>' +
+    (desc ? '<div class="option-desc">' + esc(desc) + '</div>' : '') +
+    '</div></label>';
+}
+
+function checkboxOption(key, value, label, desc) {
+  const arr = getVal(key) || [];
+  const checked = arr.includes(value);
+  return '<label class="checkbox-option' + (checked ? ' selected' : '') + '" onclick="IAM.toggleCheckbox(\'' + key + '\',\'' + value + '\')">' +
+    '<input type="checkbox"' + (checked ? ' checked' : '') + '>' +
+    '<div class="option-content"><div class="option-label">' + esc(label) + '</div>' +
+    (desc ? '<div class="option-desc">' + esc(desc) + '</div>' : '') +
+    '</div></label>';
+}
+
+function renderRoleEntry(idx, role) {
+  return '<div class="role-entry">' +
+    '<input type="text" placeholder="Role name" value="' + esc(role.name) + '" onchange="IAM.updateRole(' + idx + ',\'name\',this.value)">' +
+    '<input type="text" placeholder="Description" value="' + esc(role.description) + '" onchange="IAM.updateRole(' + idx + ',\'description\',this.value)" style="flex:2;">' +
+    '<select onchange="IAM.updateRole(' + idx + ',\'riskLevel\',this.value)">' +
+    '<option value="low"' + (role.riskLevel === 'low' ? ' selected' : '') + '>Low</option>' +
+    '<option value="medium"' + (role.riskLevel === 'medium' ? ' selected' : '') + '>Medium</option>' +
+    '<option value="high"' + (role.riskLevel === 'high' ? ' selected' : '') + '>High</option>' +
+    '<option value="critical"' + (role.riskLevel === 'critical' ? ' selected' : '') + '>Critical</option>' +
+    '</select>' +
+    '<button class="btn-remove" onclick="IAM.removeRole(' + idx + ')" title="Remove">&times;</button>' +
+    '</div>';
+}
+
+function fieldCheck(key, label, tag, desc) {
+  const val = getVal(key);
+  const checked = val === true;
+  return '<label class="field-check" onclick="IAM.toggleFieldCheck(\'' + key + '\')">' +
+    '<input type="checkbox"' + (checked ? ' checked' : '') + '>' +
+    '<span class="fc-label">' + esc(label) + '</span>' +
+    '<span class="fc-tag">' + esc(tag) + '</span></label>';
+}
+
+function hlaItem(key, question) {
+  const val = getVal(key);
+  return '<div class="hla-item' + (val === true ? ' checked' : '') + '">' +
+    '<div class="hla-q">' + esc(question) + '</div>' +
+    '<div class="hla-toggle">' +
+    '<button class="hla-btn yes' + (val === true ? ' active-yes' : '') + '" onclick="IAM.setVal(\'' + key + '\',true);IAM.rerender()">Yes</button>' +
+    '<button class="hla-btn no' + (val === false ? ' active-no' : '') + '" onclick="IAM.setVal(\'' + key + '\',false);IAM.rerender()">No</button>' +
+    '</div></div>';
+}
+
+function reviewItem(label, value) {
+  const display = value || '';
+  const cls = display ? '' : ' unknown';
+  return '<div class="review-item"><span class="ri-label">' + esc(label) + '</span>' +
+    '<span class="ri-value' + cls + '">' + esc(display || 'Not provided') + '</span></div>';
+}
+
+/* ===== CSV EXPORT ENGINE ===== */
+function csvEscape(val) {
+  if (val === null || val === undefined) return '';
+  const s = String(val);
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+function generateCSV(headers, rows) {
+  let csv = headers.map(csvEscape).join(',') + '\r\n';
+  rows.forEach(row => { csv += row.map(csvEscape).join(',') + '\r\n'; });
+  return csv;
+}
+
+function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType || 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = filename;
+  document.body.appendChild(link); link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function exportSailPoint() {
+  const headers = ['appName','appUrl','deploymentType','iscIntegrationPattern','patternConfidence','fileDeliveryPattern',
+    'nativeConnectorAvailable','hasApi','apiType','apiSupportsWrite','canExportCsv','csvDeliveryMethod',
+    'estimatedAccountCount','rbacRolesIdentified','roleCount','dataDeliveryScheduleCapable','hasAdIntegration',
+    'v2AccountTypeAvailable','v2CreatedDateAvailable','v2LastLoginAvailable',
+    'v2EntitlementOwnerAvailable','v2EntitlementTypeAvailable','v2EntitlementRiskLevelAvailable','notes'];
+  const rows = STATE.apps.map(a => {
+    const sp = a._derived.spPattern;
+    const del = a._derived.spDelivery;
+    const yn = v => v === true ? 'Yes' : v === false ? 'No' : 'Unknown';
+    return [a.appName, a.appUrl, a.deploymentType, sp ? sp.label : '', sp ? sp.confidence : '',
+      del ? 'Pattern ' + del.pattern + ': ' + del.label : 'N/A',
+      sp && sp.pattern === 1 ? 'Yes' : 'No', yn(a.hasApi), a.apiType, yn(a.apiSupportsWrite),
+      yn(a.canExportCsv), a.fileDeliveryMethod || a.csvExportMethod, a.estimatedUsers,
+      a.roles.map(r => r.name).join('; '), a.roles.length, yn(a.fileDeliveryMethod === 'sftp' || a.fileDeliveryMethod === 'networkShare' || a.fileDeliveryMethod === 'api'),
+      yn(a.hasAdIntegration), yn(a.v2Fields.accountType), yn(a.v2Fields.created), yn(a.v2Fields.lastLogin),
+      yn(a.v2Fields.entOwner), yn(a.v2Fields.entType), yn(a.v2Fields.entRisk), a.notes];
+  });
+  return generateCSV(headers, rows);
+}
+
+function exportCyberArk() {
+  const headers = ['appName','appUrl','hlaPriority','tier','hlaScore','accountTypes','adminCount',
+    'authMethod','mfaType','canChangePasswordViaApi','cpmApproach','adminAccessMethod',
+    'psmApproach','marketplaceConnectorAvailable','estimatedEffortDays','platformCategory','notes'];
+  const rows = STATE.apps.filter(a => a.hasPrivilegedAccounts === true).map(a => {
+    const ca = a._derived.caClass || {};
+    const yn = v => v === true ? 'Yes' : v === false ? 'No' : 'Unknown';
+    return [a.appName, a.appUrl, ca.priority || '', ca.tier !== undefined ? ca.tier : '',
+      ca.score || '', a.adminAccountTypes.join('; '), a.adminAccountCount, a.adminAuthMethod,
+      a.adminMfaRequired === true ? a.adminMfaType : 'None', yn(a.canChangePasswordViaApi),
+      ca.cpm || '', a.adminAccessMethods.join('; '), ca.psm || '', yn(ca.marketplace),
+      ca.effort || '', a.knownAppMatch ? (KNOWN_APPS[a.knownAppMatch]?.ca?.category || '') : '',
+      a.notes];
+  });
+  return generateCSV(headers, rows);
+}
+
+function exportOktaEntra() {
+  const headers = ['appName','appUrl','currentIdp','signOnMode','hasScimProvisioning','oktaAppLabel',
+    'migrationTarget','entraEquivalentConfig','knownGaps','gapCount','recommendedMigrationWave','notes'];
+  const rows = STATE.apps.filter(a => a.currentIdp || a.loginMethod === 'sso').map(a => {
+    const mig = a._derived.oktaMigration || {};
+    const yn = v => v === true ? 'Yes' : v === false ? 'No' : 'Unknown';
+    return [a.appName, a.appUrl, a.currentIdp, a.oktaSignOnMode, yn(a.hasScimProvisioning),
+      a.oktaAppLabel, a.migrationTarget, mig.entraEquiv || '', (mig.gaps || []).join('; '),
+      mig.gapCount || 0, mig.wave || 'N/A', a.notes];
+  });
+  return generateCSV(headers, rows);
+}
+
+function exportLogin() {
+  const headers = ['appName','appUrl','captureMethod','detectedFormFields','authMethodIndicator',
+    'samlEntityId','oidcClientId','detectedIdp','detectedMfaIndicators','rawMetadataJson'];
+  const rows = STATE.apps.filter(a => a.loginAnalysis).map(a => {
+    const la = a.loginAnalysis;
+    return [a.appName, a.appUrl, la.captureMethod || '', la.formFields || '', la.authIndicator || '',
+      la.samlEntityId || '', la.oidcClientId || '', la.detectedIdp || '', la.mfaIndicators || '',
+      JSON.stringify(la.raw || {})];
+  });
+  return generateCSV(headers, rows);
+}
+
+function exportMaster() {
+  const headers = ['appName','appUrl','vendor','deploymentType','estimatedUsers','appOwnerName','appOwnerEmail',
+    'description','dateSubmitted',
+    'sp_integrationPattern','sp_confidence','sp_fileDelivery','sp_hasApi','sp_canExportCsv',
+    'ca_hlaPriority','ca_tier','ca_hlaScore','ca_cpmApproach','ca_psmApproach','ca_marketplace',
+    'okta_currentIdp','okta_signOnMode','okta_migrationTarget','okta_entraEquiv','okta_gapCount','okta_wave',
+    'login_detectedIdp','login_authIndicator'];
+  const rows = STATE.apps.map(a => {
+    const sp = a._derived.spPattern || {};
+    const del = a._derived.spDelivery;
+    const ca = a._derived.caClass || {};
+    const mig = a._derived.oktaMigration || {};
+    const yn = v => v === true ? 'Yes' : v === false ? 'No' : '';
+    const la = a.loginAnalysis || {};
+    return [a.appName, a.appUrl, a.vendor, a.deploymentType, a.estimatedUsers, a.appOwnerName, a.appOwnerEmail,
+      a.description, a._modified,
+      sp.label || '', sp.confidence || '', del ? del.label : '', yn(a.hasApi), yn(a.canExportCsv),
+      ca.priority || '', ca.tier !== undefined ? ca.tier : '', ca.score || '', ca.cpm || '', ca.psm || '', yn(ca.marketplace),
+      a.currentIdp, a.oktaSignOnMode, a.migrationTarget, mig.entraEquiv || '', mig.gapCount || '', mig.wave || '',
+      la.detectedIdp || '', la.authIndicator || ''];
+  });
+  return generateCSV(headers, rows);
+}
+
+/* ===== LOGIN PAGE ANALYSIS ===== */
+function analyzeLoginData(data) {
+  const result = { captureMethod: '', formFields: '', authIndicator: '', samlEntityId: '', oidcClientId: '',
+    detectedIdp: '', mfaIndicators: '', raw: data, _summary: '' };
+  if (!data) return result;
+
+  result.captureMethod = data._tool ? 'Bookmarklet' : 'Paste Source';
+
+  if (data.forms && data.forms.length > 0) {
+    const fields = [];
+    data.forms.forEach(f => {
+      (f.fields || []).forEach(fi => { if (fi.name || fi.id) fields.push((fi.name || fi.id) + ':' + fi.type); });
+    });
+    result.formFields = fields.join('; ');
+  }
+
+  const signals = data.identitySignals || {};
+  if (signals.oktaDetected) result.detectedIdp = 'Okta';
+  else if (signals.entraDetected) result.detectedIdp = 'Microsoft Entra ID';
+  else if (signals.authODetected) result.detectedIdp = 'Auth0';
+  else if (signals.pingDetected) result.detectedIdp = 'Ping Identity';
+
+  const saml = data.samlIndicators || {};
+  if (saml.hasSAMLRequest || saml.hasRelayState) result.authIndicator = 'SAML redirect detected';
+  if (saml.entityIdMeta) result.samlEntityId = saml.entityIdMeta;
+
+  const oidc = data.oidcIndicators || {};
+  if (oidc.hasClientId || oidc.hasResponseType) {
+    result.authIndicator = result.authIndicator ? result.authIndicator + '; OIDC params detected' : 'OIDC params detected';
+  }
+  if (oidc.clientId) result.oidcClientId = oidc.clientId;
+
+  const mfa = data.mfaIndicators || {};
+  const mfaSigs = [];
+  if (mfa.hasTotpFields) mfaSigs.push('TOTP input field');
+  if (mfa.hasAuthenticatorLinks) mfaSigs.push('Authenticator link');
+  result.mfaIndicators = mfaSigs.join('; ');
+
+  if (!result.authIndicator && data.forms) {
+    const hasPassword = data.forms.some(f => f.fields && f.fields.some(fi => fi.type === 'password'));
+    if (hasPassword) result.authIndicator = 'Local password form detected';
+  }
+
+  const parts = [];
+  if (result.detectedIdp) parts.push('IdP: ' + result.detectedIdp);
+  if (result.authIndicator) parts.push(result.authIndicator);
+  if (result.mfaIndicators) parts.push('MFA: ' + result.mfaIndicators);
+  result._summary = parts.join(' | ') || 'No definitive indicators found';
+
+  return result;
+}
+
+/* ===== SESSION PERSISTENCE ===== */
+function saveSession() {
+  try { localStorage.setItem('iam-intake-session', JSON.stringify(STATE)); } catch (e) { /* quota exceeded */ }
+}
+
+function loadSession() {
+  try {
+    const saved = localStorage.getItem('iam-intake-session');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.apps && parsed.apps.length > 0) {
+        STATE.apps = parsed.apps;
+        STATE.activeIndex = parsed.activeIndex || 0;
+        STATE.sessionId = parsed.sessionId || crypto.randomUUID();
+        STATE.apps.forEach(a => { if (!a._derived) a._derived = {}; computeDerived(); });
+        return true;
+      }
+    }
+  } catch (e) { /* parse error */ }
+  return false;
+}
+
+/* ===== BOOKMARKLET GENERATION ===== */
+function generateBookmarklet() {
+  const code = "(function(){var r={_tool:'IAM-Intake-LoginAnalysis',_version:1,_capturedAt:new Date().toISOString(),pageTitle:document.title,pageUrl:location.href,forms:Array.from(document.querySelectorAll('form')).map(function(f){return{action:f.action,method:f.method,id:f.id,fields:Array.from(f.querySelectorAll('input,select,textarea')).map(function(i){return{name:i.name,type:i.type,id:i.id,placeholder:i.placeholder}})}}),samlIndicators:{hasSAMLRequest:location.search.indexOf('SAMLRequest')>-1,hasRelayState:location.search.indexOf('RelayState')>-1,entityIdMeta:(function(){var m=document.querySelector('meta[name=entityId],meta[name=entity-id]');return m?m.content:null})(),samlLoginUrls:Array.from(document.querySelectorAll('a[href*=saml],a[href*=SAML]')).map(function(a){return a.href})},oidcIndicators:{hasClientId:location.search.indexOf('client_id')>-1,hasResponseType:location.search.indexOf('response_type')>-1,clientId:(new URLSearchParams(location.search)).get('client_id'),redirectUri:(new URLSearchParams(location.search)).get('redirect_uri')},mfaIndicators:{hasTotpFields:!!document.querySelector('input[name*=otp],input[name*=totp],input[name*=mfa],input[name*=verification]'),hasAuthenticatorLinks:!!document.querySelector('a[href*=authenticator],a[href*=mfa]')},identitySignals:{oktaDetected:!!document.querySelector('[class*=okta],[id*=okta]')||location.hostname.indexOf('okta.com')>-1,entraDetected:location.hostname.indexOf('login.microsoftonline.com')>-1,authODetected:location.hostname.indexOf('auth0.com')>-1,pingDetected:location.hostname.indexOf('pingone.com')>-1}};var o=JSON.stringify(r,null,2);var d=document.createElement('div');d.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:999999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;';d.innerHTML='<div style=\"background:#fff;border-radius:10px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow:auto;\"><h3 style=\"margin:0 0 12px;color:#1b2a4a;\">Login Page Analysis Captured</h3><p style=\"font-size:14px;color:#666;margin-bottom:12px;\">Copy the JSON below and paste it into the IAM Intake Tool.</p><textarea id=\"iam-cap\" style=\"width:100%;height:300px;font-family:monospace;font-size:12px;border:1px solid #ddd;border-radius:6px;padding:12px;\" readonly>'+o+'</textarea><div style=\"margin-top:12px;display:flex;gap:8px;\"><button onclick=\"document.getElementById(\\'iam-cap\\').select();document.execCommand(\\'copy\\');this.textContent=\\'Copied!\\'\" style=\"padding:8px 16px;background:#1b2a4a;color:#fff;border:none;border-radius:6px;cursor:pointer;\">Copy to Clipboard</button><button onclick=\"this.closest(\\'div\\').closest(\\'div\\').closest(\\'div\\').remove()\" style=\"padding:8px 16px;background:#eee;color:#333;border:none;border-radius:6px;cursor:pointer;\">Close</button></div></div>';document.body.appendChild(d)})();";
+  return 'javascript:' + encodeURIComponent(code);
+}
+
+/* ===== PUBLIC API ===== */
+window.IAM = {
+  setVal: function(key, val) { setVal(key, val); },
+  setRadio: function(key, val) { setVal(key, val); renderStep(app()._step); },
+  toggleCheckbox: function(key, val) {
+    const arr = getVal(key) || [];
+    const idx = arr.indexOf(val);
+    if (idx > -1) arr.splice(idx, 1); else arr.push(val);
+    setVal(key, [...arr]);
+    renderStep(app()._step);
+  },
+  toggleFieldCheck: function(key) {
+    const val = getVal(key);
+    setVal(key, val === true ? false : true);
+    renderStep(app()._step);
+  },
+  rerender: function() { renderStep(app()._step); },
+  goToStep: function(stepId) {
+    if (!isStepVisible(stepId)) return;
+    renderStep(stepId);
+  },
+  addRole: function() {
+    app().roles.push({ name: '', description: '', riskLevel: 'low', userCount: '' });
+    renderStep(app()._step);
+  },
+  removeRole: function(idx) {
+    app().roles.splice(idx, 1);
+    renderStep(app()._step);
+  },
+  updateRole: function(idx, field, val) {
+    app().roles[idx][field] = val;
+    saveSession();
+    computeDerived();
+    renderSummary();
+  },
+  addApp: function() {
+    STATE.apps.push(createApp());
+    STATE.activeIndex = STATE.apps.length - 1;
+    renderStep(1);
+    renderSummary();
+  },
+  switchApp: function(idx) {
+    if (idx >= 0 && idx < STATE.apps.length) {
+      STATE.activeIndex = idx;
+      renderStep(app()._step);
+      renderSummary();
+    }
+  },
+  removeApp: function(idx) {
+    if (STATE.apps.length <= 1) return;
+    if (!confirm('Remove this application entry?')) return;
+    STATE.apps.splice(idx, 1);
+    if (STATE.activeIndex >= STATE.apps.length) STATE.activeIndex = STATE.apps.length - 1;
+    renderStep(app()._step);
+    renderSummary();
+  },
+  clearSession: function() {
+    if (!confirm('This will clear all entered data. Are you sure?')) return;
+    localStorage.removeItem('iam-intake-session');
+    STATE.apps = [createApp()];
+    STATE.activeIndex = 0;
+    renderStep(1);
+    renderSummary();
+  },
+  toggleSummary: function() {
+    const panel = $('#summary-panel');
+    panel.classList.toggle('collapsed');
+  },
+
+  showModal: function(id) { $('#' + id).classList.add('open'); },
+  closeModal: function(id) { $('#' + id).classList.remove('open'); },
+
+  filterCatalog: function(query) {
+    const items = $$('#catalog-grid .catalog-item');
+    const q = query.toLowerCase();
+    items.forEach(item => {
+      const name = item.dataset.name.toLowerCase();
+      const vendor = item.dataset.vendor.toLowerCase();
+      item.style.display = (name.includes(q) || vendor.includes(q)) ? '' : 'none';
+    });
+  },
+  selectCatalogItem: function(name) {
+    STATE.catalogSelection = name;
+    $$('#catalog-grid .catalog-item').forEach(el => {
+      el.classList.toggle('selected', el.dataset.name === name);
+    });
+  },
+  applyKnownApp: function() {
+    const name = STATE.catalogSelection;
+    if (!name || !KNOWN_APPS[name]) return;
+    const known = KNOWN_APPS[name];
+    const a = app();
+    a.knownAppMatch = name;
+    a.appName = a.appName || name;
+    a.vendor = a.vendor || known.vendor;
+    a.deploymentType = a.deploymentType || known.deploymentType;
+    if (known.okta.oin) {
+      a.loginMethod = a.loginMethod || 'sso';
+      a.identityProvider = a.identityProvider || 'okta';
+      a.authProtocol = a.authProtocol || known.okta.signOnMode || '';
+      a.currentIdp = a.currentIdp || 'okta';
+      a.oktaSignOnMode = a.oktaSignOnMode || known.okta.signOnMode || '';
+      if (known.okta.scim) a.hasScimProvisioning = a.hasScimProvisioning !== null ? a.hasScimProvisioning : true;
+    }
+    if (known.ca.marketplace) a.cyberarkMarketplace = true;
+    if (known.roles && a.roles.length === 0) {
+      a.roles = known.roles.map(r => ({ name: r, description: '', riskLevel: 'low', userCount: '' }));
+      a.hasRoles = true;
+    }
+    a._modified = new Date().toISOString();
+    computeDerived();
+    IAM.closeModal('catalog-modal');
+    renderStep(app()._step);
+    renderSummary();
+  },
+
+  parseBookmarkletOutput: function() {
+    const textarea = $('#bookmarklet-paste');
+    try {
+      const data = JSON.parse(textarea.value);
+      const result = analyzeLoginData(data);
+      STATE._lastLoginAnalysis = result;
+      showLoginResults(result);
+    } catch (e) {
+      alert('Could not parse the pasted data. Make sure you copied the complete JSON from the bookmarklet.');
+    }
+  },
+  parsePageSource: function() {
+    const html = $('#source-paste').value;
+    if (!html) return;
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const data = {
+        pageTitle: doc.title,
+        pageUrl: '',
+        forms: Array.from(doc.querySelectorAll('form')).map(f => ({
+          action: f.action, method: f.method, id: f.id,
+          fields: Array.from(f.querySelectorAll('input,select,textarea')).map(i => ({
+            name: i.name, type: i.type, id: i.id, placeholder: i.placeholder
+          }))
+        })),
+        samlIndicators: {
+          hasSAMLRequest: false, hasRelayState: false,
+          entityIdMeta: (function() { var m = doc.querySelector('meta[name=entityId],meta[name=entity-id]'); return m ? m.content : null; })(),
+          samlLoginUrls: Array.from(doc.querySelectorAll('a[href*=saml],a[href*=SAML]')).map(a => a.href)
+        },
+        oidcIndicators: { hasClientId: false, hasResponseType: false, clientId: null, redirectUri: null },
+        mfaIndicators: {
+          hasTotpFields: !!doc.querySelector('input[name*=otp],input[name*=totp],input[name*=mfa],input[name*=verification]'),
+          hasAuthenticatorLinks: !!doc.querySelector('a[href*=authenticator],a[href*=mfa]')
+        },
+        identitySignals: {
+          oktaDetected: !!doc.querySelector('[class*=okta],[id*=okta]'),
+          entraDetected: false, authODetected: false, pingDetected: false
+        }
+      };
+      const result = analyzeLoginData(data);
+      STATE._lastLoginAnalysis = result;
+      showLoginResults(result);
+    } catch (e) {
+      alert('Could not parse the HTML source code. Make sure you copied the complete page source.');
+    }
+  },
+  applyLoginAnalysis: function() {
+    if (!STATE._lastLoginAnalysis) return;
+    const la = STATE._lastLoginAnalysis;
+    const a = app();
+    a.loginAnalysis = la;
+    if (la.detectedIdp === 'Okta') { a.identityProvider = 'okta'; a.currentIdp = 'okta'; a.loginMethod = 'sso'; }
+    else if (la.detectedIdp === 'Microsoft Entra ID') { a.identityProvider = 'entraId'; a.currentIdp = 'entraId'; a.loginMethod = 'sso'; }
+    if (la.authIndicator && la.authIndicator.includes('SAML')) a.authProtocol = 'saml';
+    else if (la.authIndicator && la.authIndicator.includes('OIDC')) a.authProtocol = 'oidc';
+    else if (la.authIndicator && la.authIndicator.includes('Local')) a.loginMethod = a.loginMethod || 'local';
+    a._modified = new Date().toISOString();
+    computeDerived();
+    IAM.closeModal('bookmarklet-modal');
+    renderStep(app()._step);
+    renderSummary();
+  },
+
+  exportCSV: function(type) {
+    const now = new Date().toISOString().slice(0, 10);
+    const generators = {
+      sailpoint: () => ({ data: exportSailPoint(), name: 'sailpoint-onboarding-' + now + '.csv' }),
+      cyberark: () => ({ data: exportCyberArk(), name: 'cyberark-onboarding-' + now + '.csv' }),
+      okta: () => ({ data: exportOktaEntra(), name: 'okta-entra-migration-' + now + '.csv' }),
+      login: () => ({ data: exportLogin(), name: 'login-analysis-' + now + '.csv' }),
+      master: () => ({ data: exportMaster(), name: 'app-inventory-master-' + now + '.csv' })
+    };
+    if (generators[type]) {
+      const result = generators[type]();
+      downloadFile(result.data, result.name);
+    }
+  },
+  exportAllCSV: function() {
+    const now = new Date().toISOString().slice(0, 10);
+    downloadFile(exportSailPoint(), 'sailpoint-onboarding-' + now + '.csv');
+    setTimeout(() => downloadFile(exportCyberArk(), 'cyberark-onboarding-' + now + '.csv'), 200);
+    setTimeout(() => downloadFile(exportOktaEntra(), 'okta-entra-migration-' + now + '.csv'), 400);
+    setTimeout(() => downloadFile(exportLogin(), 'login-analysis-' + now + '.csv'), 600);
+    setTimeout(() => downloadFile(exportMaster(), 'app-inventory-master-' + now + '.csv'), 800);
+    setTimeout(() => downloadFile(JSON.stringify({ version: '1.0.0', exported: new Date().toISOString(), session: STATE.sessionId, apps: STATE.apps }, null, 2),
+      'iam-intake-data-' + now + '.json', 'application/json'), 1000);
+  },
+  exportJSON: function() {
+    const now = new Date().toISOString().slice(0, 10);
+    downloadFile(JSON.stringify({ version: '1.0.0', exported: new Date().toISOString(), session: STATE.sessionId, apps: STATE.apps }, null, 2),
+      'iam-intake-data-' + now + '.json', 'application/json');
+  }
+};
+
+function showLoginResults(result) {
+  const div = $('#login-results');
+  const summary = $('#login-results-summary');
+  div.style.display = 'block';
+  summary.textContent = result._summary;
+  $('#apply-login-btn').style.display = 'inline-flex';
+}
+
+/* ===== CATALOG GRID RENDERING ===== */
+function renderCatalogGrid() {
+  const grid = $('#catalog-grid');
+  grid.innerHTML = Object.entries(KNOWN_APPS).map(([name, info]) => {
+    return '<div class="catalog-item" data-name="' + esc(name) + '" data-vendor="' + esc(info.vendor) + '" onclick="IAM.selectCatalogItem(\'' + esc(name).replace(/'/g, "\\'") + '\')">' +
+      '<div class="app-name">' + esc(name) + '</div>' +
+      '<div class="app-vendor">' + esc(info.vendor) + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+/* ===== INITIALIZATION ===== */
+function init() {
+  const recovered = loadSession();
+  if (recovered) {
+    STATE.apps.forEach(a => computeDerived.call(null));
+  }
+  // Set bookmarklet href
+  const bmLink = $('#bookmarklet-link');
+  if (bmLink) bmLink.href = generateBookmarklet();
+
+  renderCatalogGrid();
+  renderStep(app()._step || 1);
+  renderSummary();
+
+  // Close modals on overlay click
+  $$('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === this) this.classList.remove('open');
+    });
+  });
+
+  // Auto-save interval
+  setInterval(saveSession, 30000);
+}
+
+// Fix computeDerived for all apps on load
+function computeAllDerived() {
+  const savedIdx = STATE.activeIndex;
+  STATE.apps.forEach((a, i) => {
+    STATE.activeIndex = i;
+    computeDerived();
+  });
+  STATE.activeIndex = savedIdx;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  computeAllDerived();
+  init();
+});
+
+})();
+</script>
+</body>
+</html>
