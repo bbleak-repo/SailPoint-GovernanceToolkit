@@ -4,10 +4,18 @@
     Generates the daily evidence report (v8) -- fast, state-powered HTML report
     that reads pre-computed entitlement and reviewer state files.
 .DESCRIPTION
-    V8 is a read-only visualization script. It reads entitlement-state.jsonl and
-    reviewer-state.jsonl (populated by Update-SPStateFiles.ps1) plus lightweight
-    campaign metadata from daily-metrics.jsonl. V8 never calls the ISC API and
-    never parses raw campaign cache. Target execution: <30 seconds.
+    V8 reads entitlement-state.jsonl and reviewer-state.jsonl (populated by
+    Update-SPStateFiles.ps1) plus lightweight campaign metadata from
+    daily-metrics.jsonl. V8 never calls the ISC API. Target execution: <30 seconds.
+
+    NOT strictly read-only by default: when the state files are missing or stale,
+    V8 AUTO-REFRESHES them from the cache (Invoke-SPStateTracking), which REWRITES
+    both state files. Pass -NoRefresh for a guaranteed read-only run.
+
+    Scope honesty: Sections 1-4 show CURRENT CUMULATIVE state as of the state
+    files' last update; only Section 2 (Newly Decided) is filtered by the date
+    window. When a campaign filter is supplied, Sections 1-4 are filtered to the
+    matching campaign SERIES; Sections 5-7 always cover all reviewers.
 
     Data sources:
       {Metrics.Path}/entitlement-state.jsonl  (via Read-SPStateFiles)
@@ -87,12 +95,6 @@ param(
     [string]$ConfigPath,
 
     [Parameter()]
-    [string]$Token,
-
-    [Parameter()]
-    [int]$TokenExpiryMinutes = 10,
-
-    [Parameter()]
     [int]$ChronicThreshold = 5,
 
     [Parameter()]
@@ -100,7 +102,7 @@ param(
     [string]$OutputMode = 'Both',
 
     [Parameter()]
-    [switch]$NoCache,
+    [switch]$NoRefresh,
 
     [Parameter()]
     [Alias('?')]
@@ -197,14 +199,15 @@ function Get-V8PrimarySeriesData {
 function Get-V8DayLogEntries {
     <#
     .SYNOPSIS
-        Parses a dayLog string (e.g. "C:0601|M:0602|P:0603") into an ordered list
-        of [hashtable] with keys Date (MMDD) and State (C/P/M/U).
+        Parses a dayLog string (e.g. "C:20260601|M:20260602") into an ordered list
+        of [hashtable] with keys Date (yyyyMMdd) and State (C/P/M/U). Day keys carry
+        the year (v2.1 state format) so January never sorts before last December.
     #>
     param([string]$DayLog)
     $entries = [System.Collections.Generic.List[hashtable]]::new()
     if ([string]::IsNullOrWhiteSpace($DayLog)) { return $entries }
     foreach ($part in $DayLog.Split('|')) {
-        if ($part.Length -ge 6 -and $part[1] -eq ':') {
+        if ($part.Length -ge 10 -and $part[1] -eq ':') {
             $entries.Add(@{ Date = $part.Substring(2); State = [string]$part[0] })
         }
     }
@@ -212,13 +215,8 @@ function Get-V8DayLogEntries {
 }
 
 function Get-V8CurrentIsoWeek {
-    $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
-    $now = Get-Date
-    $weekNum = $cal.GetWeekOfYear($now, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek, [System.DayOfWeek]::Monday)
-    $year = $now.Year
-    if ($weekNum -eq 1 -and $now.Month -eq 12) { $year++ }
-    if ($weekNum -ge 52 -and $now.Month -eq 1) { $year-- }
-    return '{0}-W{1:D2}' -f $year, $weekNum
+    # True ISO-8601 week (Thursday rule) via the shared SP.ReviewerState helper.
+    return (Get-SPIsoWeekString -Date (Get-Date))
 }
 
 #endregion
@@ -311,8 +309,13 @@ if (-not (Test-Path $effectiveOutputPath)) {
     New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null
 }
 
-# Resolve date range (shared helper from SP.StateOrchestrator)
+# Resolve date range (shared helper from SP.StateOrchestrator). Invalid explicit
+# dates are a PARAMETER ERROR (exit 2), never a silent fallback to the default window.
 $dateRange = Resolve-SPReportDateRange -DaysBack $DaysBack -StartDate $StartDate -EndDate $EndDate
+if (-not $dateRange.Valid) {
+    Write-Host "  ERROR: $($dateRange.Error)" -ForegroundColor Red
+    exit 2
+}
 $filterStartDate = $dateRange.StartDate
 $filterEndDate   = $dateRange.EndDate
 Write-Host "  Date range:    $filterStartDate to $filterEndDate" -ForegroundColor DarkGray
@@ -337,28 +340,99 @@ Write-Host "    Metrics dir: $metricsDir" -ForegroundColor DarkGray
 
 $tracking = Read-SPStateFiles -MetricsPath $metricsDir
 
-# Auto-refresh: if state files are missing or stale (not updated today), rebuild from cache.
-# Uses delta mode (processedInstances) so only new campaign instances are processed.
-# First run (bootstrap) is slower; subsequent runs are fast (~30 sec).
-$isStale = $tracking.Entitlement.IsFirstRun -or ([string]$tracking.Entitlement.LastRunDate -ne $todayLabel)
-if ($isStale) {
-    $staleReason = if ($tracking.Entitlement.IsFirstRun) { 'no state files found' } else { "last updated $($tracking.Entitlement.LastRunDate)" }
+# Auto-refresh: if EITHER state file is missing or stale (not updated today), rebuild
+# from cache (delta mode -- ACTIVE instances re-process; terminal ones skip). Suppressed
+# by -NoRefresh for a guaranteed read-only run. The orchestrator holds a global mutex,
+# so an overlapping Update-SPStateFiles.ps1 cannot interleave.
+$isStale = $tracking.Entitlement.IsFirstRun -or $tracking.Reviewer.IsFirstRun -or
+           ([string]$tracking.Entitlement.LastRunDate -ne $todayLabel) -or
+           ([string]$tracking.Reviewer.LastRunDate -ne $todayLabel)
+if ($isStale -and -not $NoRefresh) {
+    $staleReason = if ($tracking.Entitlement.IsFirstRun -or $tracking.Reviewer.IsFirstRun) { 'state file(s) missing' } else { "last updated $($tracking.Entitlement.LastRunDate)" }
     Write-Host "    Auto-refresh needed ($staleReason)" -ForegroundColor Yellow
     Write-Host '    Updating from cache...' -ForegroundColor Yellow
     try {
-        $tracking = Invoke-SPStateTracking -MetricsPath $metricsDir -TodayLabel $todayLabel
-        Write-Host "    Refreshed: $($tracking.Entitlement.Total) entitlements, $($tracking.Reviewer.Total) reviewers" -ForegroundColor Green
+        $refresh = Invoke-SPStateTracking -MetricsPath $metricsDir -TodayLabel $todayLabel
+        if ($refresh.Success) {
+            $tracking = $refresh
+            Write-Host "    Refreshed: $($tracking.Entitlement.Total) entitlements, $($tracking.Reviewer.Total) reviewers" -ForegroundColor Green
+        }
+        else {
+            Write-Host "    WARN: Auto-refresh failed: $($refresh.Error)" -ForegroundColor Yellow
+            Write-Host '    Continuing with existing state data (may be incomplete).' -ForegroundColor Yellow
+        }
     }
     catch {
         Write-Host "    WARN: Auto-refresh failed: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host '    Continuing with existing state data (may be incomplete).' -ForegroundColor Yellow
-        # Re-read whatever exists (might be partial from a prior run)
         $tracking = Read-SPStateFiles -MetricsPath $metricsDir
     }
 }
+elseif ($isStale) {
+    Write-Host '    State is stale but -NoRefresh was passed -- rendering existing data as-is.' -ForegroundColor Yellow
+}
+
+# Surface corrupt-line counts (Read-SPStateFiles reports them; silence hides shrinkage).
+foreach ($side in @('Entitlement', 'Reviewer')) {
+    $sk2 = 0
+    if ($tracking[$side].ContainsKey('SkippedLines')) { $sk2 = [int]$tracking[$side].SkippedLines }
+    if ($sk2 -gt 0) {
+        Write-Host "    WARN: $side state file had $sk2 unparseable line(s) -- records may be missing." -ForegroundColor Yellow
+    }
+}
+
+# Campaign SERIES filter for the state sections: entitlement records carry seriesName,
+# so a campaign filter can honestly narrow Sections 1-4 (previously the filter applied
+# only to Section 8 while the state sections silently stayed tenant-wide).
+$seriesFilterActive = $hasCampaignFilter
+function Test-V8SeriesMatch {
+    param([string]$SeriesName)
+    if (-not $seriesFilterActive) { return $true }
+    if ([string]::IsNullOrWhiteSpace($SeriesName)) { return $false }
+    if ($campaignFilter.ContainsKey('CampaignNameContains')) {
+        return ($SeriesName.IndexOf($campaignFilter['CampaignNameContains'], [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+    }
+    if ($campaignFilter.ContainsKey('CampaignNameStartsWith')) {
+        return $SeriesName.StartsWith($campaignFilter['CampaignNameStartsWith'], [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    if ($campaignFilter.ContainsKey('CampaignName')) {
+        # Exact campaign names carry date suffixes; compare series stems.
+        $fStem = ''
+        if (Get-Command Get-SPCampaignSeriesKey -ErrorAction Ignore) {
+            $fk = Get-SPCampaignSeriesKey -Name ([string]$campaignFilter['CampaignName'])
+            if ($fk.Success) { $fStem = [string]$fk.Data.SeriesStem }
+        }
+        if ([string]::IsNullOrWhiteSpace($fStem)) { $fStem = [string]$campaignFilter['CampaignName'] }
+        return ($SeriesName -ieq $fStem)
+    }
+    return $true
+}
 
 $entStateMap  = $tracking.Entitlement.StateMap
-$entTotal     = $tracking.Entitlement.Total
+if ($seriesFilterActive) {
+    $filteredMap = @{}
+    foreach ($sk in $entStateMap.Keys) {
+        $rec = $entStateMap[$sk]
+        $recSeries = ''
+        if ($rec.ContainsKey('seriesName')) { $recSeries = [string]$rec['seriesName'] }
+        if (Test-V8SeriesMatch -SeriesName $recSeries) { $filteredMap[$sk] = $rec }
+    }
+    Write-Host "    Series filter: $($filteredMap.Count) of $($entStateMap.Count) entitlement records match" -ForegroundColor DarkGray
+    $entStateMap = $filteredMap
+    # Recompute the summary over the filtered set
+    $filteredSummary = @{ APPROVE = 0; REVOKE = 0; PENDING = 0; UNDECIDED = 0 }
+    foreach ($sk in $entStateMap.Keys) {
+        $rec = $entStateMap[$sk]
+        $inS = $true
+        if ($rec.ContainsKey('inCurrentScope')) { $inS = [bool]$rec['inCurrentScope'] }
+        if ($inS) {
+            $dec2 = [string]$rec['currentDecision']
+            if ($filteredSummary.ContainsKey($dec2)) { $filteredSummary[$dec2]++ }
+        }
+    }
+    $tracking.Entitlement.StateSummary = $filteredSummary
+}
+$entTotal     = $entStateMap.Count
 $entSummary   = $tracking.Entitlement.StateSummary
 $entLastRun   = $tracking.Entitlement.LastRunDate
 
@@ -448,10 +522,13 @@ foreach ($sk in $entStateMap.Keys) {
     if ([string]::IsNullOrWhiteSpace($changeDate)) { continue }
     if ($changeDate -lt $filterStartDate -or $changeDate -gt $filterEndDate) { continue }
 
-    # Only show items that transitioned from PENDING/UNDECIDED (genuine new decisions)
+    # Only show items with an OBSERVED transition from PENDING/UNDECIDED. A blank
+    # priorDecision means the item was FIRST SEEN already decided (bootstrap over
+    # historical cache) -- that is not a new decision and listing it fabricated
+    # decision-activity evidence.
     $priorDecision = ''
     if ($rec.ContainsKey('priorDecision')) { $priorDecision = [string]$rec['priorDecision'] }
-    if ($priorDecision -ne 'PENDING' -and $priorDecision -ne 'UNDECIDED' -and $priorDecision -ne '') { continue }
+    if ($priorDecision -ne 'PENDING' -and $priorDecision -ne 'UNDECIDED') { continue }
 
     $newlyDecidedList.Add(@{
         IdentityName     = [string]$rec['identityName']
@@ -616,7 +693,9 @@ foreach ($rvName in $rvReviewerMap.Keys) {
 
     $dayLog = ''
     if ($psd.ContainsKey('dayLog')) { $dayLog = [string]$psd['dayLog'] }
-    $entries = Get-V8DayLogEntries -DayLog $dayLog
+    # @() is load-bearing: PowerShell unrolls the returned List, so a single-entry
+    # dayLog otherwise arrives as a bare hashtable and $entries[0] indexes to $null.
+    $entries = @(Get-V8DayLogEntries -DayLog $dayLog)
     if ($entries.Count -eq 0) { continue }
 
     # Take last 14 entries
@@ -723,6 +802,13 @@ $safeLastRun = ConvertTo-SPHtmlSafe $lastRunDate
 [void]$sb.Append('<h1>Daily Evidence Report - State Tracking</h1>')
 [void]$sb.Append("<div class='sub'>SailPoint ISC Governance Toolkit | Generated: $(ConvertTo-SPHtmlSafe $todayLabel) $((Get-Date).ToString('HH:mm'))</div>")
 [void]$sb.Append("<div class='sub'>State files last updated: $safeLastRun | Entitlement: $entTotal records | Reviewer: $rvTotal reviewers</div>")
+if ($seriesFilterActive) {
+    [void]$sb.Append("<div class='sub'>Campaign filter active: Sections 1-4 are limited to matching series; Sections 5-7 cover ALL reviewers.</div>")
+}
+[void]$sb.Append("<div class='sub'>Sections 1, 3-7 show current cumulative state as of $safeLastRun; only Section 2 and Section 8 are filtered to $filterStartDate .. $filterEndDate.</div>")
+if ($lastRunDate -ne '(unknown)' -and $lastRunDate -lt $filterEndDate) {
+    [void]$sb.Append("<div class='sub' style='color:#ffd27f'>WARNING: state was last updated $safeLastRun, before the end of the requested window -- data may not cover the full range.</div>")
+}
 [void]$sb.Append('</div>')
 
 # ======================== Section 1: Entitlement State Summary ========================
@@ -743,7 +829,7 @@ if ($newlyDecidedSorted.Count -eq 0) {
     [void]$sb.Append("<p class='note'>No state changes detected. State files last updated: $safeLastRun.</p>")
 }
 else {
-    [void]$sb.Append("<p class='note'>$($newlyDecidedSorted.Count) entitlement(s) changed state on $safeLastRun.</p>")
+    [void]$sb.Append("<p class='note'>$($newlyDecidedSorted.Count) entitlement(s) with an observed PENDING/UNDECIDED -&gt; decision transition between $filterStartDate and $filterEndDate (dates are the campaign's own day).</p>")
     [void]$sb.Append('<table class="report"><tr><th>Identity</th><th>Access</th><th>Source</th><th>Prior State</th><th>Current State</th><th>Reviewer</th><th>Changed</th></tr>')
     foreach ($nd in $newlyDecidedSorted) {
         $stateClass = 's-green'
@@ -827,6 +913,7 @@ $lowColor = 's-red'; $modColor = 's-amber'; $hiColor = 's-green'
 [void]$sb.Append('</div>')
 
 if ($reviewerSorted.Count -gt 0) {
+    [void]$sb.Append("<p class='note'>Score/Completed/Missed/Observed are GLOBAL (all series); the streak columns come from the reviewer's primary series only.</p>")
     [void]$sb.Append('<table class="report"><tr><th>Reviewer</th><th>Score</th><th>Completed</th><th>Missed</th><th>Observed</th><th>Current Streak</th><th>Miss Streak</th><th>Series</th></tr>')
     foreach ($rv in $reviewerSorted) {
         $scoreVal = [int]$rv['Score']
@@ -898,9 +985,9 @@ if ($heatmapSorted.Count -eq 0 -or $sortedHeatDates.Count -eq 0) {
 else {
     [void]$sb.Append('<table class="report"><tr><th>Reviewer</th>')
     foreach ($hd in $sortedHeatDates) {
-        # Format MMDD as MM/DD
+        # Format yyyyMMdd as MM/DD
         $hdLabel = $hd
-        if ($hd.Length -eq 4) { $hdLabel = $hd.Substring(0,2) + '/' + $hd.Substring(2,2) }
+        if ($hd.Length -eq 8) { $hdLabel = $hd.Substring(4,2) + '/' + $hd.Substring(6,2) }
         [void]$sb.Append("<th style='text-align:center;font-size:10px;min-width:28px'>$(ConvertTo-SPHtmlSafe $hdLabel)</th>")
     }
     [void]$sb.Append('</tr>')
@@ -916,8 +1003,12 @@ else {
 
         foreach ($hd in $sortedHeatDates) {
             if ($entryLookup.ContainsKey($hd)) {
-                $st = $entryLookup[$hd]
-                [void]$sb.Append("<td style='text-align:center;padding:3px'><span class='heat-cell hc-$st'>$st</span></td>")
+                # Whitelist the state char: it comes from a data file and lands in an
+                # attribute -- anything but C/P/M/U renders as '?' rather than raw.
+                $st = [string]$entryLookup[$hd]
+                if ($st -notmatch '^[CPMU]$') { $st = '?' }
+                $stCls = if ($st -eq '?') { '' } else { " hc-$st" }
+                [void]$sb.Append("<td style='text-align:center;padding:3px'><span class='heat-cell$stCls'>$(ConvertTo-SPHtmlSafe $st)</span></td>")
             }
             else {
                 [void]$sb.Append("<td style='text-align:center;padding:3px'><span class='heat-cell' style='background:#eee;color:#ccc'>-</span></td>")
@@ -936,13 +1027,33 @@ if ($campaignRecords.Count -eq 0) {
     [void]$sb.Append("<p class='note'>No campaign data available. daily-metrics.jsonl not found or empty.</p>")
 }
 else {
-    # Sort by captureDate descending, then campaign name
-    $campSorted = @($campaignRecords | Sort-Object { [string]$_.captureDate }, { [string]$_.campaign.name } -Descending)
+    # Dedupe by captureDate|campaignId, latest captureTimestamp wins (V7 convention --
+    # multiple same-day captures of one campaign are normal and rendered as duplicate
+    # rows without this).
+    $dedup = @{}
+    foreach ($cr in $campaignRecords) {
+        $campIdV8 = ''
+        try { $campIdV8 = [string]$cr.campaign.id } catch { }
+        $dk = "$([string]$cr.captureDate)|$campIdV8"
+        $ts = ''
+        try { $ts = [string]$cr.captureTimestamp } catch { }
+        if (-not $dedup.ContainsKey($dk)) { $dedup[$dk] = $cr }
+        else {
+            $existingTs = ''
+            try { $existingTs = [string]$dedup[$dk].captureTimestamp } catch { }
+            if ($ts -gt $existingTs) { $dedup[$dk] = $cr }
+        }
+    }
+    $campSorted = @($dedup.Values | Sort-Object { [string]$_.captureDate }, { [string]$_.campaign.name } -Descending)
+    if ($campSorted.Count -lt $campaignRecords.Count) {
+        [void]$sb.Append("<p class='note'>$($campaignRecords.Count - $campSorted.Count) duplicate same-day capture(s) collapsed (latest capture wins).</p>")
+    }
 
     [void]$sb.Append('<table class="report"><tr><th>Date</th><th>Campaign</th><th>Status</th><th>Total</th><th>Approved</th><th>Revoked</th><th>Undecided</th><th>Completion %</th></tr>')
 
     $maxCampRows = 50
     $campRowCount = 0
+    $suspectRows = 0
     foreach ($cr in $campSorted) {
         if ($campRowCount -ge $maxCampRows) { break }
         $campRowCount++
@@ -955,25 +1066,37 @@ else {
             $crStatus = ConvertTo-SPHtmlSafe ([string]$cr.campaign.status)
         } catch { }
 
-        $crTotal     = 0; $crApproved = 0; $crRevoked = 0; $crUndecided = 0; $crCompPct = 0
+        # V4b writes totalItems/pending (never total/undecided) -- the old field names
+        # rendered the Total and Undecided columns as a permanent 0.
+        $crTotal     = 0; $crApproved = 0; $crRevoked = 0; $crUndecided = 0; $crCompPct = 0; $crSchema = 0
         try {
             $sm = $cr.summary
             if ($null -ne $sm) {
-                $crTotal     = [int](Get-V8Prop -Object $sm -Name 'total' -Default 0)
+                $crTotal     = [int](Get-V8Prop -Object $sm -Name 'totalItems' -Default 0)
                 $crApproved  = [int](Get-V8Prop -Object $sm -Name 'approved' -Default 0)
                 $crRevoked   = [int](Get-V8Prop -Object $sm -Name 'revoked' -Default 0)
-                $crUndecided = [int](Get-V8Prop -Object $sm -Name 'undecided' -Default 0)
+                $crUndecided = [int](Get-V8Prop -Object $sm -Name 'pending' -Default 0)
                 $crCompPct   = [double](Get-V8Prop -Object $sm -Name 'completionPct' -Default 0)
             }
+            $crSchema = [int](Get-V8Prop -Object $cr -Name 'schemaVersion' -Default 0)
         } catch { }
         $compPctStr = [math]::Round($crCompPct, 1)
         $compClass = 's-green'
         if ($crCompPct -lt 50) { $compClass = 's-red' }
         elseif ($crCompPct -lt 80) { $compClass = 's-amber' }
 
+        # Legacy suspect flag (V7 convention): a pre-schemaVersion-2 COMPLETED record at
+        # ~100% with 0 pending has force-close auto-approvals counted as approved.
+        # KEPT (never dropped) but badged so the row is not read as genuine completion.
+        $suspectBadge = ''
+        if ($crSchema -lt 2 -and $crStatus -eq 'COMPLETED' -and $crUndecided -eq 0 -and $crCompPct -ge 99.5) {
+            $suspectBadge = " <span class='s-amber' style='font-size:10px'>(suspect: force-close inflated)</span>"
+            $suspectRows++
+        }
+
         [void]$sb.Append('<tr>')
         [void]$sb.Append("<td>$crDate</td>")
-        [void]$sb.Append("<td>$crName</td>")
+        [void]$sb.Append("<td>$crName$suspectBadge</td>")
         [void]$sb.Append("<td>$crStatus</td>")
         [void]$sb.Append("<td>$crTotal</td>")
         [void]$sb.Append("<td>$crApproved</td>")
@@ -985,6 +1108,9 @@ else {
     [void]$sb.Append('</table>')
     if ($campSorted.Count -gt $maxCampRows) {
         [void]$sb.Append("<p class='note'>Showing $maxCampRows of $($campSorted.Count) records.</p>")
+    }
+    if ($suspectRows -gt 0) {
+        [void]$sb.Append("<p class='note'>$suspectRows record(s) predate canonical counts (schemaVersion &lt; 2); their approved/completion figures include force-close auto-approvals.</p>")
     }
 }
 [void]$sb.Append('</div>')
@@ -1047,4 +1173,10 @@ Write-Host "  Duration: $durationStr" -ForegroundColor DarkGray
 
 #endregion
 
+# Exit contract: 5 = no state data at all (documented; previously unreachable --
+# an empty report exited 0 and schedulers never noticed).
+if ($entTotal -eq 0 -and $rvTotal -eq 0) {
+    Write-Host '  No state data available. Run Update-SPStateFiles.ps1 (or remove -NoRefresh).' -ForegroundColor Yellow
+    exit 5
+}
 exit 0

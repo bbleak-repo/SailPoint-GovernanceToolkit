@@ -315,6 +315,7 @@
         'Write-SPReviewerState'
         'Get-SPCampaignSeriesName'
         'Get-SPReviewerStateKey'
+        'Get-SPIsoWeekString'
 
         # SP.StateOrchestrator - Single-call state tracking + shared report utilities
         'Invoke-SPStateTracking'
