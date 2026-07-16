@@ -1,7 +1,18 @@
 # State Tracking Integration Test Guide
 
+> **Updated 2026-07-16 (state stack v2.1):** the automated equivalents of these
+> tests now live in `Tests/SP.StateOrchestrator.Tests.ps1` (bootstrap populates
+> BOTH files, same-day rerun is a no-op, ACTIVE instances re-process until
+> COMPLETED, corrupt state file aborts, `-Force` rebuilds without double-counting)
+> plus the reworked `SP.EntitlementState`/`SP.ReviewerState` suites. Behavior
+> changes vs the original guide: reviewer records key on stable identity
+> (`id:<ReviewerId>` else `nm:<name>`), dayLog/stateLog day keys are `yyyyMMdd`,
+> ACTIVE campaigns re-process on every run until they complete, and a corrupt
+> state file makes the run FAIL (exit 5) instead of silently rebuilding.
+> The console header reads `State File Update` (not `State Tracking:`).
+
 > **Pre-requisite:** a populated rich audit cache (`Audit/cache/items-*.jsonl`,
-> `roster-*.json`, `meta-*.json`) from at least one prior V4/V4b/V4e run.
+> `roster-*.json`, `items-*.meta.json`) from at least one prior V4/V4b/V4e run.
 > You need ISC network access only if the cache is empty and you need to
 > run V4/V4e first to populate it.
 

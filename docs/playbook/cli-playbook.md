@@ -1758,15 +1758,27 @@ run or to rebuild after cache changes. Takes 2-5 minutes depending on cache size
 - `entitlement-state.jsonl` -- one line per IdentityId|AccessId|SourceId pair (~500KB-1.5MB)
 - `reviewer-state.jsonl` -- one line per reviewer (~50-200KB)
 
-**Related:** `Invoke-SPDailyEvidenceReportV8.ps1` (the fast report that reads these files).
+**Related:** `Invoke-SPDailyEvidenceReportV8.ps1` (the fast report that reads these files),
+`Invoke-SPDailyEvidenceReportV4g.ps1` (the API-driven KPI report that also feeds the
+state database -- briefly shipped under the V4c name; the original read-only series
+V4c is unchanged and documented above).
 
 ### `Invoke-SPDailyEvidenceReportV8.ps1`
-**Purpose:** fast, read-only evidence report powered by the persistent state files
+**Purpose:** fast evidence report powered by the persistent state files
 (output `daily-evidence-v8-{timestamp}.html`). Runs in under 30 seconds because it
 reads pre-computed state instead of reprocessing the raw cache.
 
 **Self-contained:** V8 auto-detects stale or missing state files and refreshes them
-from the cache before rendering. No manual `Update-SPStateFiles.ps1` step required.
+from the cache before rendering (this REWRITES the two state files -- pass
+`-NoRefresh` for a guaranteed read-only run). No manual `Update-SPStateFiles.ps1`
+step required.
+
+**Scope semantics (honesty):** Sections 1, 3-7 show the CURRENT CUMULATIVE state as
+of the state files' last update; only Section 2 (Newly Decided) and Section 8
+(Campaign Summary) are filtered to the `-DaysBack`/`-StartDate`/`-EndDate` window.
+With a campaign filter, Sections 1-4 narrow to the matching campaign SERIES;
+Sections 5-7 always cover all reviewers. The header states all of this and warns
+when the state predates the end of the requested window.
 
 **Report sections:**
 1. **Entitlement State Summary** -- honest decision distribution (APPROVE / REVOKE / PENDING / UNDECIDED tiles)
@@ -1789,8 +1801,11 @@ from the cache before rendering. No manual `Update-SPStateFiles.ps1` step requir
 | `-Status <status[]>` | Filter campaign summary by status (`ACTIVE`, `COMPLETED`, etc.). |
 | `-ChronicThreshold <n>` | Consecutive PENDING/UNDECIDED campaigns before an item is "chronic" (default `5`). |
 | `-OutputMode` | `Console`/`HTML`/`Both` (default `Both`). |
+| `-NoRefresh` | Never rewrite the state files -- render whatever exists (true read-only run). |
 | `-MetricsPath <dir>` | Override the metrics directory. |
 | `-OutputPath <dir>` | Override the output directory. |
+
+**Exit codes:** `0` normal, `2` invalid `-StartDate`/`-EndDate`, `5` no state data.
 
 ```powershell
 # Default: last 7 days, all campaigns
