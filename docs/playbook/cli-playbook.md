@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`, **`Invoke-SPCampaignClose`**
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, **`Invoke-SPEscalationMailer`**, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG; + lean v2)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG; + lean v2)**, weekly digest, **AD-ISC-HR reconciliation export (non-expiring change-detection cache)**, **state tracking (V8 fast report + Update-SPStateFiles)**, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -1716,9 +1716,109 @@ Parameters are identical to V4c:
 ```
 
 **Output:** `daily-evidence-v4e-{timestamp}.html` (plus a `.json` sidecar under `-OutputMode Both`).
-**Related:** `Invoke-SPDailyEvidenceReportV4c.ps1` (the analytics-look sibling — same engine/data),
+**Related:** `Invoke-SPDailyEvidenceReportV4c.ps1` (the analytics-look sibling -- same engine/data),
 `Invoke-SPDailyEvidenceReportV4b.ps1` (the chrome source V4e reproduces AND the data engine whose rich
 cache it reads).
+
+### `Update-SPStateFiles.ps1`
+**Purpose:** updates (or bootstraps) the persistent entitlement and reviewer state JSONL
+files from the rich audit cache. Uses `SP.CampaignSeries` (the same honest classifier as
+V4e) to classify every cached item, then persists the results to
+`{Metrics.Path}/entitlement-state.jsonl` and `{Metrics.Path}/reviewer-state.jsonl`.
+
+**Delta mode** (default): skips campaign instances already recorded in the state files'
+`processedInstances` set. Daily runs complete in ~30 seconds.
+**Bootstrap mode** (`-Force`): reprocesses ALL cached campaigns from scratch. Use on first
+run or to rebuild after cache changes. Takes 2-5 minutes depending on cache size.
+
+> **V8 auto-refreshes** -- you do not need to run this script manually before V8.
+> V8 detects stale/missing state files and calls the same update logic internally.
+> This script exists for explicit control: forced rebuilds, CI/CD pipelines, or
+> pre-warming state before running V8.
+
+| Parameter | Description |
+|---|---|
+| `-Force` | Ignore processedInstances and reprocess ALL cached campaigns (bootstrap/rebuild). |
+| `-CachePath <dir>` | Override the rich-cache directory (defaults to the configured Audit cache). |
+| `-MetricsPath <dir>` | Override the metrics directory (defaults to `Metrics.Path` from settings.json). |
+| `-ConfigPath <file>` | Override settings.json path. |
+
+```powershell
+# Delta update (default -- process only new campaign instances)
+.\Scripts\Update-SPStateFiles.ps1
+
+# Bootstrap from scratch (first run or rebuild)
+.\Scripts\Update-SPStateFiles.ps1 -Force
+
+# Custom cache location
+.\Scripts\Update-SPStateFiles.ps1 -Force -CachePath C:\AuditExport\cache
+```
+
+**Output:** updates two JSONL files in the metrics directory:
+- `entitlement-state.jsonl` -- one line per IdentityId|AccessId|SourceId pair (~500KB-1.5MB)
+- `reviewer-state.jsonl` -- one line per reviewer (~50-200KB)
+
+**Related:** `Invoke-SPDailyEvidenceReportV8.ps1` (the fast report that reads these files).
+
+### `Invoke-SPDailyEvidenceReportV8.ps1`
+**Purpose:** fast, read-only evidence report powered by the persistent state files
+(output `daily-evidence-v8-{timestamp}.html`). Runs in under 30 seconds because it
+reads pre-computed state instead of reprocessing the raw cache.
+
+**Self-contained:** V8 auto-detects stale or missing state files and refreshes them
+from the cache before rendering. No manual `Update-SPStateFiles.ps1` step required.
+
+**Report sections:**
+1. **Entitlement State Summary** -- honest decision distribution (APPROVE / REVOKE / PENDING / UNDECIDED tiles)
+2. **Newly Decided** -- items that transitioned from PENDING/UNDECIDED to APPROVE/REVOKE within the date range
+3. **Chronically Unreviewed** -- items stuck in PENDING/UNDECIDED for N+ consecutive campaigns
+4. **Dropped from Scope** -- items that disappeared from all campaigns
+5. **Reviewer Engagement Summary** -- engagement scores with streaks, sorted worst-first
+6. **Reviewer Weekly Compliance** -- reviewers who missed 2+ days this ISO week
+7. **Reviewer Engagement Heatmap** -- C/P/M/U daily grid per reviewer
+8. **Campaign Summary** -- completion data from daily-metrics.jsonl for the date range
+
+| Parameter | Description |
+|---|---|
+| `-DaysBack <n>` | Lookback window in days (default `7`). Controls campaign summary and newly-decided date range. |
+| `-StartDate <yyyy-MM-dd>` | Explicit start date (overrides DaysBack). |
+| `-EndDate <yyyy-MM-dd>` | Explicit end date (defaults to today). |
+| `-CampaignName <name>` | Exact campaign name filter for campaign summary. |
+| `-CampaignNameStartsWith <prefix>` | Campaign name prefix filter. |
+| `-CampaignNameContains <substring>` | Campaign name substring filter. |
+| `-Status <status[]>` | Filter campaign summary by status (`ACTIVE`, `COMPLETED`, etc.). |
+| `-ChronicThreshold <n>` | Consecutive PENDING/UNDECIDED campaigns before an item is "chronic" (default `5`). |
+| `-OutputMode` | `Console`/`HTML`/`Both` (default `Both`). |
+| `-MetricsPath <dir>` | Override the metrics directory. |
+| `-OutputPath <dir>` | Override the output directory. |
+
+```powershell
+# Default: last 7 days, all campaigns
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1
+
+# 14-day window
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -DaysBack 14
+
+# Explicit date range
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -StartDate 2026-07-01 -EndDate 2026-07-15
+
+# Filter to Daily Attestation campaigns
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -CampaignNameContains 'Daily' -DaysBack 30
+
+# Only COMPLETED campaigns, stricter chronic threshold
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -Status COMPLETED -ChronicThreshold 3
+
+# Console-only summary (no HTML file)
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -OutputMode Console
+```
+
+**Output:** `daily-evidence-v8-{timestamp}.html`.
+**Data sources:** `entitlement-state.jsonl` + `reviewer-state.jsonl` (pre-computed) +
+`daily-metrics.jsonl` (campaign metadata). No ISC API calls, no cache parsing.
+**Related:** `Update-SPStateFiles.ps1` (explicit state rebuild),
+`Invoke-SPDailyEvidenceReportV4e.ps1` (the cache-based series report V8 complements).
+**Testing:** see `docs/testing/state-tracking-integration-test.md` for the integration
+test guide.
 
 ### `Invoke-SPPendingReviewerScrape.ps1`
 **Purpose:** an **ad-hoc, dependency-free** scraper that answers "who keeps not attesting?" straight from

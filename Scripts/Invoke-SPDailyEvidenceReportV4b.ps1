@@ -945,6 +945,24 @@ try {
         $withPendingRvCount = @($reviewerRecords | Where-Object { [int]$_.pending -gt 0 }).Count
         Write-Verbose "    [JSONL] Reviewer stats: $completedRvCount completed, $withPendingRvCount with pending, $noItemsCount no items, total=$($reviewerRecords.Count)"
 
+        # Honest reviewer completion: override Phase-based counts with item-level truth.
+        # ISC force-closes set ALL certs to Phase='SIGNED', inflating the signed count
+        # for rubber-stamped campaigns. Item-level data (from Group-SPAuditDecisions)
+        # already classifies idNowAutoApproved items as Pending, so $completedRvCount
+        # is honest by construction. This fixes the JSONL completionPctByReviewer and
+        # reviewersSigned fields that downstream consumers (V6, V7, V7c) rely on.
+        $phaseSignedCount = $signedCount   # preserve raw ISC Phase-based count
+        $signedCount = $completedRvCount
+        $notStartedCount = @($reviewerRecords | Where-Object {
+            [int]$_.total -gt 0 -and [int]$_.approved -eq 0 -and [int]$_.revoked -eq 0
+        }).Count
+        $rvCompPct = if ($allReviewers.Count -gt 0) {
+            [math]::Round($signedCount / $allReviewers.Count * 100, 1)
+        } else { 0 }
+        if ($phaseSignedCount -ne $signedCount) {
+            Write-Host "    [JSONL] Honest reviewer correction: Phase-signed=$phaseSignedCount, item-completed=$signedCount (force-close inflation detected)" -ForegroundColor Cyan
+        }
+
         $audit['ReviewerRecords'] = @($reviewerRecords)
 
         # Per-source breakdown
@@ -1031,7 +1049,7 @@ try {
                 reviewersTotal          = $allReviewers.Count
                 reviewersSigned         = $signedCount
                 reviewersNotStarted     = $notStartedCount
-                reviewersInProgress     = $allReviewers.Count - $signedCount - $notStartedCount
+                reviewersInProgress     = [math]::Max(0, $allReviewers.Count - $signedCount - $notStartedCount)
                 privilegedTotal         = $privTotal
                 privilegedApproved      = $privAppr
                 privilegedRevoked       = $privRev

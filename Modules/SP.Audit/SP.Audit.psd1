@@ -37,6 +37,7 @@
         'SP.CampaignVelocity.psm1'
         'SP.CertTracker.psm1'
         'SP.ReviewerAccountability.psm1'
+        'SP.CampaignSeries.psm1'
         'SP.EntitlementState.psm1'
         'SP.ReviewerState.psm1'
         'SP.StateOrchestrator.psm1'
@@ -277,6 +278,14 @@
         'Export-SPCertTrackerHtml'
         'Export-SPAttestationEvidenceHtml'
 
+        # SP.CampaignSeries - Cross-instance series analysis and honest decision classification
+        'Get-SPCampaignSeriesKey'
+        'Group-SPCampaignSeries'
+        'Get-SPSeriesItemKey'
+        'Resolve-SPSeriesItemState'
+        'Get-SPSeriesAttestationDelta'
+        'Get-SPSeriesInstanceCompletion'
+
         # SP.EntitlementState - Persistent per-entitlement state tracking
         'Read-SPEntitlementState'
         'Update-SPEntitlementState'
@@ -288,9 +297,10 @@
         'Write-SPReviewerState'
         'Get-SPCampaignSeriesName'
 
-        # SP.StateOrchestrator - Single-call state tracking for any script
+        # SP.StateOrchestrator - Single-call state tracking + shared report utilities
         'Invoke-SPStateTracking'
         'Read-SPStateFiles'
+        'Resolve-SPReportDateRange'
     )
 
     # Do not export variables or aliases from nested modules
