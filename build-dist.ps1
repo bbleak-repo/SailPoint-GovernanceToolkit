@@ -16,6 +16,10 @@
         Same runtime tree plus Tests\ (unit tests + TestData) and developer
         docs (DEV.md, toolkit-status.md) relocated to the root.
 
+    Both zips also carry tools\Intake-Tool\ (the cross-product IAM app
+    onboarding intake tool) -- a dotted-line companion to this project, kept
+    under tools\ so it never shadows the toolkit runtime.
+
     Both layouts preserve the Modules\SP.X\ structure so module manifests and
     the GUI's ..\..\Gui XAML lookup resolve correctly. The previous flat
     user-handoff layout could not run because Show-SPDashboard.ps1 derives the
@@ -115,6 +119,11 @@ function Get-RuntimePlan {
     Add-Item $Plan 'Config/settings.json'       (Join-Path $RepoRoot 'Config\settings.json')
     Add-Item $Plan 'Config/test-campaigns.csv'  (Join-Path $RepoRoot 'Config\test-campaigns.csv')
     Add-Item $Plan 'Config/test-identities.csv' (Join-Path $RepoRoot 'Config\test-identities.csv')
+    # Dotted-line companion tool: IAM app onboarding intake (scripts + docs + the
+    # HTML intake form). Shipped in BOTH zips, preserved under tools\Intake-Tool\.
+    if (Test-Path (Join-Path $RepoRoot 'tools\Intake-Tool')) {
+        Add-Tree $Plan 'tools\Intake-Tool' 'tools/Intake-Tool' @('*.ps1', '*.md', '*.html', '*.css', '*.py', '*.json')
+    }
 }
 
 function Get-UserPlan {
