@@ -1,0 +1,24 @@
+{
+    "title": "IAM Application Integration Intake",
+    "subtitle": "User Guide -- HTML Intake Tool & PowerShell Consolidator",
+    "version": "1.0.0",
+    "sections": [
+        {"file": "00-foundations.md", "group": "Foundations"},
+        {"file": "01-html-intake-tool.md", "group": "HTML Intake Tool"},
+        {"file": "02-powershell-consolidator.md", "group": "PowerShell Consolidator"},
+        {"file": "03-sharepoint-sync.md", "group": "SharePoint Sync Tool"}
+    ],
+    "theme": "_framework.css",
+    "output": "../USER-GUIDE.html",
+    "colors": {
+        "primary": "#2d5a8a",
+        "sidebar": "#1b2a4a",
+        "header": "#1b2a4a",
+        "accent": "#00897b"
+    },
+    "sidebar_label": "IAM Intake Guide",
+    "meta": {
+        "Generated": "2026-06-27",
+        "Products": "SailPoint, CyberArk, Okta/Entra ID"
+    }
+}
