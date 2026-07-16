@@ -50,6 +50,9 @@
         'Get-SPAuditCertifications'
         'Get-SPAuditCertificationItems'
         'Get-SPCachedCampaignItems'
+        'Get-SPCachedCampaignRoster'
+        'Get-SPCachedCampaignSeries'
+        'Get-SPAuditEffectiveCacheTtl'
         'Clear-SPAuditItemCache'
         'Clear-SPAuditAccountCache'
         'Get-SPAuditCampaignReport'
@@ -62,9 +65,21 @@
 
         # SP.AuditReportCore - Categorization and metrics
         'Group-SPAuditDecisions'
+        'ConvertTo-SPCanonicalDecision'
+        'Test-SPAutoApproveMarker'
+        'Get-SPClosedIncompleteQualifier'
+        'Resolve-SPDecisionDateDisplay'
+        'Get-SPReviewerCompletion'
+        'Get-SPForceSignedReviewerCount'
+        'Get-SPDistinctReviewerSignOff'
+        'Get-SPGenuineReviewerSignOff'
+        'Resolve-SPRosterSignOffProvenance'
+        'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
         'Get-SPRevocationDisposition'
         'Group-SPReviewerActions'
+        'Group-SPCompletedPendingByReviewer'
+        'Resolve-SPCaptureDateKey'
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
@@ -228,6 +243,7 @@
         'Export-SPRemediationTickets'
 
         # SP.CampaignDelta - Dated campaign snapshots (diff/trend foundation)
+        'Get-SPStableScopeKey'
         'Build-SPCampaignSnapshotData'
         'Save-SPCampaignSnapshot'
         'Get-SPCampaignSnapshot'
@@ -253,6 +269,7 @@
         # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
         'Save-SPCampaignTrendPoint'
         'Get-SPCampaignTrend'
+        'Get-SPCampaignReviewerTrend'
         'Export-SPCampaignTrendHtml'
         'Get-SPProgramTrend'
         'Export-SPProgramTrendHtml'

@@ -1831,17 +1831,16 @@ foreach ($audit in $campaignAudits) {
     # Collapse signed+total to the SAME distinct-by-reviewer basis the correction and the
     # "Reviewers who did not complete" section use. Additive: $totRev (the "Reviewers: N" display
     # count) is untouched; $signed / $totRevSignOff feed ONLY the sign-off % and qualifier.
-    $soDistinctExec = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
-    $signed = $soDistinctExec.Signed
-    $totRevSignOff = $soDistinctExec.Total
-    # Honest sign-off (genuine vs force-close): ISC force-signs every cert at a force-close,
-    # so cert Phase=='SIGNED' alone over-states real reviewer sign-off. Subtract reviewers whose
-    # certs were ADMIN force-signed (signedBy.id != reviewer.id, POSITIVE evidence only) from the
-    # Phase-based count so an admin force-close never reads as a reviewer sign-off and the exec
-    # box agrees with the "Reviewers who did not complete" section. Additive -- $totRev unchanged.
+    # GENUINE sign-off (set-based): distinct reviewers, Phase=='SIGNED' minus force-sign
+    # evidence minus reviewers still holding canonically-undecided items (they cannot have
+    # genuinely signed -- their SIGNED phase is the ISC force-close). Replaces the
+    # count-arithmetic pipeline, which went inert without signedBy provenance and reported
+    # 100% sign-off for force-closed campaigns with undecided work.
     $certRosterExec = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
-    $forceSignedExec = Get-SPForceSignedReviewerCount -Roster $certRosterExec
-    $signed = [math]::Max(0, $signed - $forceSignedExec)
+    $pendingNamesExec = @(@($d['Pending']) | ForEach-Object { [string]$_.ReviewerName })
+    $gsoExec = Get-SPGenuineReviewerSignOff -Reviewers $allRevw -Roster $certRosterExec -PendingReviewerNames $pendingNamesExec
+    $signed = [int]$gsoExec.Signed
+    $totRevSignOff = [int]$gsoExec.Total
     # Canonical reviewer-completion figure/format (one helper feeds exec, KPI, and Section A).
     $rvc = Get-SPReviewerCompletion -Signed $signed -Total $totRevSignOff
     $revCompPct = $rvc.Pct
@@ -1870,7 +1869,7 @@ foreach ($audit in $campaignAudits) {
     # Closed-incomplete honest qualifier: a force-closed COMPLETED campaign with reviewers
     # who never signed OR items never manually decided (auto-approved => undecided/$pend).
     # Additive sub-row under the (retained) ISC status badge so green != clean pass.
-    $qExec = Get-SPClosedIncompleteQualifier -Status $cStatusRaw -ReviewersSigned $signed -ReviewersTotal $totRevSignOff -UndecidedCount $pend
+    $qExec = Get-SPClosedIncompleteQualifier -Status $cStatusRaw -ReviewersSigned $signed -ReviewersTotal $totRevSignOff -UndecidedCount $pend -AutoClosedCount ([int]$gsoExec.AutoClosed)
     $qualSubRow = ''
     if ($qExec.IsClosedIncomplete) {
         $qualSubRow = '<tr><td colspan="2" style="padding:6px 8px;border:1px solid #b9770e;background:#fff8e1;color:#7a5200;font-size:11px;font-weight:600;border-radius:0 0 6px 6px">&#9888; ' + (ConvertTo-SafeHtml $qExec.Caption) + '</td></tr>'
@@ -1905,7 +1904,7 @@ $qualSubRow
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555;width:120px">Campaign</td><td style="padding:6px 8px;color:#2c3e50">$cName</td></tr>
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555">Created</td><td style="padding:6px 8px;color:#2c3e50">$createdFmt</td></tr>
 $completedRow
-<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Reviewers</td><td style="padding:6px 8px;color:#2c3e50">$totRev ($($primary.Count) primary, $reassignCnt reassigned)</td></tr>
+<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Reviewers</td><td style="padding:6px 8px;color:#2c3e50">$totRevSignOff distinct ($totRev entries: $($primary.Count) primary, $reassignCnt reassigned)</td></tr>
 </table>
 </td>
 </tr></table>
@@ -1970,18 +1969,13 @@ foreach ($audit in $campaignAudits) {
     $primaryA    = if ($null -ne $ra2A -and $null -ne $ra2A['Primary'])    { @($ra2A['Primary']) }    else { @() }
     $reassignedA = if ($null -ne $ra2A -and $null -ne $ra2A['Reassigned']) { @($ra2A['Reassigned']) } else { @() }
     $allRevwA    = @($primaryA) + @($reassignedA)
-    # Distinct-by-reviewer sign-off basis (mirrors the exec box): collapse the per-cert Reassigned
-    # entries so a delegate with several force-signed reassigned certs is counted ONCE, matching the
-    # DISTINCT force-sign correction and the distinct-keyed "Reviewers who did not complete" section.
-    $soDistinctA = Get-SPDistinctReviewerSignOff -Reviewers $allRevwA
-    $signedA     = $soDistinctA.Signed
-    $totRevA     = $soDistinctA.Total
-    # Honest sign-off (genuine vs force-close): exclude admin force-signed certs (signedBy.id !=
-    # reviewer.id) from the Phase-based count so Section A's "Reviewer %" matches the exec box and
-    # cannot assert sign-off for a force-closed reviewer the same report lists as not-completed.
-    $certRosterA      = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
-    $forceSignedA     = Get-SPForceSignedReviewerCount -Roster $certRosterA
-    $signedA          = [math]::Max(0, $signedA - $forceSignedA)
+    # GENUINE sign-off (set-based, mirrors the exec box): distinct reviewers; SIGNED phases
+    # from the force-close (undecided items / admin force-sign evidence) never count.
+    $certRosterA = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+    $pendingNamesA = @(@($d['Pending']) | ForEach-Object { [string]$_.ReviewerName })
+    $gsoA        = Get-SPGenuineReviewerSignOff -Reviewers $allRevwA -Roster $certRosterA -PendingReviewerNames $pendingNamesA
+    $signedA     = [int]$gsoA.Signed
+    $totRevA     = [int]$gsoA.Total
     $rvcA        = Get-SPReviewerCompletion -Signed $signedA -Total $totRevA
     $rvLabel     = $rvcA.CombinedLabel
     $rvCls       = switch ($rvcA.SeverityClass) { 'green' { 's-green' } 'amber' { 's-amber' } 'red' { 's-red' } default { 's-amber' } }
@@ -1990,7 +1984,7 @@ foreach ($audit in $campaignAudits) {
     # Closed-incomplete honest qualifier (Section A): sub-line inside the Status cell so the
     # 10-column row shape is unchanged. Uses the canonical reviewer figure ($signedA/$totRevA,
     # matching the exec caption) and honest undecided ($p). Additive -- the ISC status text ($cs) is retained.
-    $qA = Get-SPClosedIncompleteQualifier -Status ([string]$audit['Status']) -ReviewersSigned $signedA -ReviewersTotal $totRevA -UndecidedCount $p
+    $qA = Get-SPClosedIncompleteQualifier -Status ([string]$audit['Status']) -ReviewersSigned $signedA -ReviewersTotal $totRevA -UndecidedCount $p -AutoClosedCount ([int]$gsoA.AutoClosed)
     if ($qA.IsClosedIncomplete) {
         $cs = $cs + "<br><span class='s-amber' style='font-size:10px'>" + (ConvertTo-SafeHtml $qA.Caption) + "</span>"
     }

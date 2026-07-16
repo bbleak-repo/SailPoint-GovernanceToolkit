@@ -186,7 +186,8 @@ function Get-SPClosedIncompleteQualifier {
         [string]$Status,
         [int]$ReviewersSigned,
         [int]$ReviewersTotal,
-        [int]$UndecidedCount
+        [int]$UndecidedCount,
+        [int]$AutoClosedCount = 0
     )
 
     $st = if ($null -ne $Status) { ([string]$Status).ToUpperInvariant() } else { '' }
@@ -198,6 +199,11 @@ function Get-SPClosedIncompleteQualifier {
     $caption = ''
     if ($isClosedIncomplete) {
         $caption = "Closed with incomplete work - $ReviewersSigned of $ReviewersTotal reviewers signed off, $UndecidedCount items never manually decided"
+        # Optional transparency suffix: how many SIGNED phases were the force-close, not the
+        # reviewer (genuine sign-off already excludes them). 0 keeps the caption unchanged.
+        if ($AutoClosedCount -gt 0) {
+            $caption += " ($AutoClosedCount reviewer(s) auto-closed at force-close)"
+        }
     }
 
     return [pscustomobject]@{
@@ -480,6 +486,141 @@ function Get-SPDistinctReviewerSignOff {
     return [pscustomobject]@{
         Signed = [int]$signedSeen.Count
         Total  = [int]$totalSeen.Count
+    }
+}
+
+function Get-SPGenuineReviewerSignOff {
+    <#
+    .SYNOPSIS
+        ONE set-based computation of GENUINE reviewer sign-off for a campaign: distinct
+        reviewers, Phase-based signed, minus force-signed evidence, minus reviewers who
+        still had canonically-undecided items at close.
+    .DESCRIPTION
+        Honesty/consistency (auto-closed reviewers counted as signed). ISC force-signs
+        every cert at a force-close, so Phase=='SIGNED' alone reads 100% sign-off. Two
+        corrections existed but were COUNT arithmetic (Get-SPDistinctReviewerSignOff minus
+        Get-SPForceSignedReviewerCount), which (a) double-subtracts a reviewer caught by
+        both signals and (b) goes INERT when the roster carries no signedBy provenance --
+        production reported "100 of 100 reviewers signed off" for a campaign whose own
+        accountability section listed 17 reviewers with undecided items.
+
+        This helper computes with SETS over a distinct reviewer key (ReviewerId else Name
+        else Email else position -- same ladder as Get-SPDistinctReviewerSignOff):
+
+          signedKeys  = distinct reviewers with >= 1 Phase=='SIGNED' entry
+          forcedKeys  = distinct reviewers with POSITIVE force-sign evidence on the cert
+                        roster (SignedById non-empty AND != ReviewerId -- the exact
+                        Get-SPForceSignedReviewerCount predicate)
+          pendingKeys = distinct reviewers named in -PendingReviewerNames (reviewers who
+                        ended the campaign with >= 1 canonically-undecided item -- a
+                        reviewer CANNOT genuinely sign a cert with undecided items, so
+                        their SIGNED phase can only be the force-close)
+
+          Signed (genuine) = signedKeys - forcedKeys - pendingKeys   (set difference)
+          AutoClosed       = signedKeys count - genuine count
+          NotStarted       = distinct reviewers whose EVERY entry is NOT_STARTED or
+                             DecisionsMade 0 (distinct basis, for summary consistency)
+
+        Conservative: an empty SignedById is indeterminate (never force evidence); a
+        pending name that matches no reviewer entry is ignored. Returns a plain
+        [pscustomobject] like its sibling pure helpers.
+    .PARAMETER Reviewers
+        The combined ReviewerActions Primary + Reassigned entries (.Phase/.Name; .ReviewerId/
+        .Email/.DecisionsMade used when present). $null/empty -> all zero.
+    .PARAMETER Roster
+        The sealed/live cert roster (ConvertTo-SPCertRosterEntry entries carrying
+        ReviewerId/ReviewerName/SignedById). Optional.
+    .PARAMETER PendingReviewerNames
+        Display names of reviewers holding >= 1 canonically-undecided (honest Pending)
+        item. Matched case-insensitively against entry Name. Optional.
+    .OUTPUTS
+        [pscustomobject] @{ Signed; Total; SignedRaw; AutoClosed; NotStarted; GenuineSignedNames }.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [object[]]$Reviewers,
+        [object[]]$Roster = @(),
+        [string[]]$PendingReviewerNames = @()
+    )
+
+    $totalSeen  = @{}   # key -> $true
+    $signedSeen = @{}   # key -> display name
+    $nameToKey  = @{}   # lower(name) -> key
+    $allDecided0 = @{}  # key -> $true while every entry seen is NOT_STARTED/0-decisions
+    if ($null -ne $Reviewers) {
+        $idx = 0
+        foreach ($rv in $Reviewers) {
+            if ($null -eq $rv) { continue }
+            $idx++
+            $rId = ''; $rName = ''; $rEmail = ''; $phase = ''; $decMade = $null
+            if ($null -ne $rv.PSObject.Properties['ReviewerId'])    { $rId     = [string]$rv.ReviewerId }
+            if ($null -ne $rv.PSObject.Properties['Name'])          { $rName   = [string]$rv.Name }
+            if ($null -ne $rv.PSObject.Properties['Email'])         { $rEmail  = [string]$rv.Email }
+            if ($null -ne $rv.PSObject.Properties['Phase'])         { $phase   = [string]$rv.Phase }
+            if ($null -ne $rv.PSObject.Properties['DecisionsMade']) { $decMade = $rv.DecisionsMade }
+            $key =
+                if (-not [string]::IsNullOrWhiteSpace($rId))    { 'id:' + $rId }
+                elseif (-not [string]::IsNullOrWhiteSpace($rName))  { 'nm:' + $rName }
+                elseif (-not [string]::IsNullOrWhiteSpace($rEmail)) { 'em:' + $rEmail }
+                else { 'ix:' + $idx }
+            if (-not $totalSeen.ContainsKey($key)) { $totalSeen[$key] = $true; $allDecided0[$key] = $true }
+            if ($phase -eq 'SIGNED' -and -not $signedSeen.ContainsKey($key)) { $signedSeen[$key] = $rName }
+            $entryIdle = ($phase -eq 'NOT_STARTED') -or ($null -ne $decMade -and [int]$decMade -eq 0)
+            if (-not $entryIdle) { $allDecided0[$key] = $false }
+            if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                $ln = $rName.Trim().ToLowerInvariant()
+                if (-not $nameToKey.ContainsKey($ln)) { $nameToKey[$ln] = $key }
+            }
+        }
+    }
+
+    # Positive force-sign evidence (exact Get-SPForceSignedReviewerCount predicate, but KEYED
+    # so the exclusions below are set operations that can never double-subtract).
+    $forcedKeys = @{}
+    foreach ($re in @($Roster)) {
+        if ($null -eq $re) { continue }
+        $rId = ''; $signedById = ''; $rName = ''
+        if ($null -ne $re.PSObject.Properties['ReviewerId'])   { $rId        = [string]$re.ReviewerId }
+        if ($null -ne $re.PSObject.Properties['SignedById'])   { $signedById = [string]$re.SignedById }
+        if ($null -ne $re.PSObject.Properties['ReviewerName']) { $rName      = [string]$re.ReviewerName }
+        if ([string]::IsNullOrWhiteSpace($signedById) -or $signedById -eq $rId) { continue }
+        $key = if (-not [string]::IsNullOrWhiteSpace($rId)) { 'id:' + $rId } else { 'nm:' + $rName }
+        $forcedKeys[$key] = $true
+        # The entry key ladder prefers id: but a roster hit may only align by name.
+        if (-not [string]::IsNullOrWhiteSpace($rName)) {
+            $ln = $rName.Trim().ToLowerInvariant()
+            if ($nameToKey.ContainsKey($ln)) { $forcedKeys[$nameToKey[$ln]] = $true }
+        }
+    }
+
+    $pendingKeys = @{}
+    foreach ($pn in @($PendingReviewerNames)) {
+        if ([string]::IsNullOrWhiteSpace($pn)) { continue }
+        $ln = ([string]$pn).Trim().ToLowerInvariant()
+        if ($ln -eq 'n/a') { continue }
+        if ($nameToKey.ContainsKey($ln)) { $pendingKeys[$nameToKey[$ln]] = $true }
+    }
+
+    $genuineNames = New-Object System.Collections.Generic.List[string]
+    $genuineCount = 0
+    foreach ($key in $signedSeen.Keys) {
+        if ($forcedKeys.ContainsKey($key) -or $pendingKeys.ContainsKey($key)) { continue }
+        $genuineCount++
+        $gn = [string]$signedSeen[$key]
+        if (-not [string]::IsNullOrWhiteSpace($gn)) { $genuineNames.Add($gn) }
+    }
+
+    $notStarted = 0
+    foreach ($key in $allDecided0.Keys) { if ($allDecided0[$key]) { $notStarted++ } }
+
+    return [pscustomobject]@{
+        Signed             = [int]$genuineCount
+        Total              = [int]$totalSeen.Count
+        SignedRaw          = [int]$signedSeen.Count
+        AutoClosed         = [int]($signedSeen.Count - $genuineCount)
+        NotStarted         = [int]$notStarted
+        GenuineSignedNames = @($genuineNames.ToArray())
     }
 }
 
@@ -3607,6 +3748,7 @@ Export-ModuleMember -Function @(
     'Get-SPReviewerCompletion',
     'Get-SPForceSignedReviewerCount',
     'Get-SPDistinctReviewerSignOff',
+    'Get-SPGenuineReviewerSignOff',
     'Resolve-SPRosterSignOffProvenance',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',

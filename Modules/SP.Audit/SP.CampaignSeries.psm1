@@ -388,53 +388,64 @@ function Get-SPSeriesItemFacts {
     }
     if ($null -eq $Item) { return $facts }
 
+    # PERF NOTE: this extractor runs once per item per instance (twice on the V4e path),
+    # so property reads use DIRECT member access instead of the Get-SPSeriesProp wrapper
+    # (2 nested CmdletBinding calls each). The module runs StrictMode 1: a missing member
+    # reads $null on BOTH hashtable and PSCustomObject shapes, and [string]$null -> ''
+    # reproduces the wrapper's defaults. None of the member names collide with hashtable
+    # .NET members ('Item'/'Keys'/'Count' are the dangerous ones; none are read here).
+
     # Identity id: identitySummary.identityId else identitySummary.id (caller may override the
     # primary property name via -IdentityProperty). Name for display only (never in the key).
-    $idSummary = Get-SPSeriesProp $Item 'identitySummary'
+    $idSummary = $Item.identitySummary
     $identityId = ''
     if ($null -ne $idSummary) {
-        $idProps = New-Object System.Collections.Generic.List[string]
-        if (-not [string]::IsNullOrWhiteSpace($IdentityProperty)) { $idProps.Add($IdentityProperty) }
-        $idProps.Add('identityId'); $idProps.Add('id')
-        foreach ($p in $idProps) {
-            $v = [string](Get-SPSeriesProp $idSummary $p '')
-            if (-not [string]::IsNullOrWhiteSpace($v)) { $identityId = $v; break }
+        if (-not [string]::IsNullOrWhiteSpace($IdentityProperty)) {
+            $v = [string]$idSummary.$IdentityProperty
+            if (-not [string]::IsNullOrWhiteSpace($v)) { $identityId = $v }
         }
-        $facts.IdentityName = [string](Get-SPSeriesProp $idSummary 'name' '')
+        if ($identityId -eq '') {
+            $v = [string]$idSummary.identityId
+            if (-not [string]::IsNullOrWhiteSpace($v)) { $identityId = $v }
+            else {
+                $v = [string]$idSummary.id
+                if (-not [string]::IsNullOrWhiteSpace($v)) { $identityId = $v }
+            }
+        }
+        $facts.IdentityName = [string]$idSummary.name
     }
     $facts.IdentityId = $identityId.Trim()
 
     # Access node: real ISC nests it under accessSummary.access; the simplified/mock shape uses
     # a flat .access. Read whichever is present.
-    $accessSummary = Get-SPSeriesProp $Item 'accessSummary'
+    $accessSummary = $Item.accessSummary
     $accessObj = $null
-    if ($null -ne $accessSummary) { $accessObj = Get-SPSeriesProp $accessSummary 'access' }
-    if ($null -eq $accessObj) { $accessObj = Get-SPSeriesProp $Item 'access' }
+    if ($null -ne $accessSummary) { $accessObj = $accessSummary.access }
+    if ($null -eq $accessObj) { $accessObj = $Item.access }
 
     # Entitlement/accessProfile/role node -- carries the SOURCE (sourceName/sourceId) for ISC.
     $entObj = $null
     if ($null -ne $accessSummary) {
-        foreach ($ak in @('entitlement', 'accessProfile', 'role')) {
-            $cand = Get-SPSeriesProp $accessSummary $ak
-            if ($null -ne $cand) { $entObj = $cand; break }
-        }
+        $entObj = $accessSummary.entitlement
+        if ($null -eq $entObj) { $entObj = $accessSummary.accessProfile }
+        if ($null -eq $entObj) { $entObj = $accessSummary.role }
     }
 
     if ($null -ne $accessObj) {
-        $facts.AccessId   = [string](Get-SPSeriesProp $accessObj 'id' '')
-        $facts.AccessType = [string](Get-SPSeriesProp $accessObj 'type' '')
-        $facts.AccessName = [string](Get-SPSeriesProp $accessObj 'name' '')
+        $facts.AccessId   = [string]$accessObj.id
+        $facts.AccessType = [string]$accessObj.type
+        $facts.AccessName = [string]$accessObj.name
     }
 
     # Account node (account-level discrimination): nativeIdentity + sourceId.
-    $account = Get-SPSeriesProp $Item 'account'
+    $account = $Item.account
     $accountSourceId = ''
     if ($null -ne $account) {
-        $facts.NativeIdentity = [string](Get-SPSeriesProp $account 'nativeIdentity' '')
-        $accountSourceId = [string](Get-SPSeriesProp $account 'sourceId' '')
+        $facts.NativeIdentity = [string]$account.nativeIdentity
+        $accountSourceId = [string]$account.sourceId
         if ([string]::IsNullOrWhiteSpace($accountSourceId)) {
-            $accSrc = Get-SPSeriesProp $account 'source'
-            if ($null -ne $accSrc) { $accountSourceId = [string](Get-SPSeriesProp $accSrc 'id' '') }
+            $accSrc = $account.source
+            if ($null -ne $accSrc) { $accountSourceId = [string]$accSrc.id }
         }
     }
 
@@ -442,23 +453,23 @@ function Get-SPSeriesItemFacts {
     $sourceId = ''
     if (-not [string]::IsNullOrWhiteSpace($accountSourceId)) { $sourceId = $accountSourceId }
     if ([string]::IsNullOrWhiteSpace($sourceId) -and $null -ne $entObj) {
-        $sourceId = [string](Get-SPSeriesProp $entObj 'sourceId' '')
+        $sourceId = [string]$entObj.sourceId
     }
     if ([string]::IsNullOrWhiteSpace($sourceId) -and $null -ne $accessObj) {
-        $accSource = Get-SPSeriesProp $accessObj 'source'
-        if ($null -ne $accSource) { $sourceId = [string](Get-SPSeriesProp $accSource 'id' '') }
+        $accSource = $accessObj.source
+        if ($null -ne $accSource) { $sourceId = [string]$accSource.id }
     }
     $facts.SourceId = $sourceId
 
     # Source name (name-derived fallback): entitlement.sourceName -> access.source.name -> account.sourceName.
     $sourceName = ''
-    if ($null -ne $entObj) { $sourceName = [string](Get-SPSeriesProp $entObj 'sourceName' '') }
+    if ($null -ne $entObj) { $sourceName = [string]$entObj.sourceName }
     if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $accessObj) {
-        $accSource = Get-SPSeriesProp $accessObj 'source'
-        if ($null -ne $accSource) { $sourceName = [string](Get-SPSeriesProp $accSource 'name' '') }
+        $accSource = $accessObj.source
+        if ($null -ne $accSource) { $sourceName = [string]$accSource.name }
     }
     if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $account) {
-        $sourceName = [string](Get-SPSeriesProp $account 'sourceName' '')
+        $sourceName = [string]$account.sourceName
     }
     $facts.SourceName = $sourceName
 
@@ -550,6 +561,23 @@ function Get-SPSeriesItemKey {
     return [string]$facts.ItemKey
 }
 
+function New-SPSeriesRosterIndex {
+    <#
+        Build the CertificationId -> roster-entry index Resolve-SPSeriesItemState uses for
+        reviewer attribution (first entry per cert wins). Pure. Batch callers build this ONCE
+        per instance and thread it through -RosterIndex so the roster is not re-walked per item.
+    #>
+    param([AllowEmptyCollection()][object[]]$Roster = @())
+    $idx = @{}
+    foreach ($re in @($Roster)) {
+        if ($null -eq $re) { continue }
+        $rcId = [string](Get-SPSeriesProp $re 'CertificationId' '')
+        if ([string]::IsNullOrWhiteSpace($rcId)) { continue }
+        if (-not $idx.ContainsKey($rcId)) { $idx[$rcId] = $re }
+    }
+    return $idx
+}
+
 function Resolve-SPSeriesItemState {
     <#
     .SYNOPSIS
@@ -590,6 +618,7 @@ function Resolve-SPSeriesItemState {
     param(
         [Parameter(Mandatory)][AllowNull()][object]$Item,
         [AllowEmptyCollection()][object[]]$Roster = @(),
+        [hashtable]$RosterIndex,
         [string]$CertificationId,
         [bool]$Unverified = $false,
         [string]$Status
@@ -608,29 +637,31 @@ function Resolve-SPSeriesItemState {
     $facts = Get-SPSeriesItemFacts -Item $raw
 
     # Raw decision string (mirror SP.AuditReportCore.psm1 lines 908-924): flat string or nested
-    # {value/decision/type/name}.
+    # {value/decision/type/name}. Direct member reads -- see the PERF NOTE in
+    # Get-SPSeriesItemFacts (StrictMode 1: missing member -> $null on both shapes).
     $decision = ''
-    $decRaw = Get-SPSeriesProp $raw 'decision'
+    $decRaw = $raw.decision
     if ($null -ne $decRaw) {
         if ($decRaw -is [string]) {
             $decision = $decRaw
         }
         else {
-            foreach ($prop in @('value', 'decision', 'type', 'name')) {
-                $cand = Get-SPSeriesProp $decRaw $prop ''
-                if (-not [string]::IsNullOrWhiteSpace([string]$cand)) { $decision = [string]$cand; break }
-            }
+            $cand = $decRaw.value
+            if ([string]::IsNullOrWhiteSpace([string]$cand)) { $cand = $decRaw.decision }
+            if ([string]::IsNullOrWhiteSpace([string]$cand)) { $cand = $decRaw.type }
+            if ([string]::IsNullOrWhiteSpace([string]$cand)) { $cand = $decRaw.name }
+            if (-not [string]::IsNullOrWhiteSpace([string]$cand)) { $decision = [string]$cand }
         }
     }
 
     # Justification = item.comment else item.comments (mirror lines 793-811).
     $justification = ''
-    $cmt = Get-SPSeriesProp $raw 'comment'
+    $cmt = $raw.comment
     if (-not [string]::IsNullOrWhiteSpace([string]$cmt)) {
         $justification = [string]$cmt
     }
     else {
-        $cm = Get-SPSeriesProp $raw 'comments'
+        $cm = $raw.comments
         if ($null -ne $cm) {
             if ($cm -is [string]) {
                 $justification = $cm
@@ -641,8 +672,8 @@ function Resolve-SPSeriesItemState {
                     if ($null -eq $c) { continue }
                     if ($c -is [string]) { $parts += $c }
                     else {
-                        $cc = Get-SPSeriesProp $c 'comment'
-                        $tt = Get-SPSeriesProp $c 'text'
+                        $cc = $c.comment
+                        $tt = $c.text
                         if (-not [string]::IsNullOrWhiteSpace([string]$cc)) { $parts += [string]$cc }
                         elseif (-not [string]::IsNullOrWhiteSpace([string]$tt)) { $parts += [string]$tt }
                     }
@@ -652,7 +683,7 @@ function Resolve-SPSeriesItemState {
         }
     }
 
-    $decisionDate = [string](Get-SPSeriesProp $raw 'decisionDate' '')
+    $decisionDate = [string]$raw.decisionDate
 
     # HONEST decision via the single shared classifier (demotes pending AND idNowAutoApproved-APPROVE
     # to 'Pending'). Guarded so the module does not hard-depend on it being pre-imported; the inline
@@ -692,35 +723,38 @@ function Resolve-SPSeriesItemState {
     # sealed roster -> the cert-ASSIGNED reviewer (the correct attribution for an undecided item
     # whose item.reviewedBy is null). Else fall back to item.reviewedBy ONLY when present. Else
     # '(Unassigned)'. NEVER read item.reviewedBy when it is null.
-    $rosterByCertId = @{}
-    foreach ($re in @($Roster)) {
-        if ($null -eq $re) { continue }
-        $rcId = [string](Get-SPSeriesProp $re 'CertificationId' '')
-        if ([string]::IsNullOrWhiteSpace($rcId)) { continue }
-        if (-not $rosterByCertId.ContainsKey($rcId)) { $rosterByCertId[$rcId] = $re }
+    # PERF: building this index is O(roster) -- doing it PER ITEM made the series engine
+    # O(items x roster) and hung V4e for hours on production-scale series. Batch callers
+    # (Get-SPSeriesAttestationDelta / Get-SPSeriesInstanceCompletion) build it ONCE per
+    # instance via New-SPSeriesRosterIndex and pass -RosterIndex; the per-call build below
+    # remains for direct/single-item callers.
+    $rosterByCertId = if ($PSBoundParameters.ContainsKey('RosterIndex') -and $null -ne $RosterIndex) {
+        $RosterIndex
+    } else {
+        New-SPSeriesRosterIndex -Roster $Roster
     }
 
     $reviewerName = ''; $reviewerId = ''; $reviewerEmail = ''; $reviewerSource = 'none'
     $matched = $false
     if (-not [string]::IsNullOrWhiteSpace($certId) -and $rosterByCertId.ContainsKey($certId)) {
         $re = $rosterByCertId[$certId]
-        $rn = [string](Get-SPSeriesProp $re 'ReviewerName' '')
+        $rn = [string]$re.ReviewerName
         if (-not [string]::IsNullOrWhiteSpace($rn)) {
             $reviewerName   = $rn
-            $reviewerId     = [string](Get-SPSeriesProp $re 'ReviewerId' '')
-            $reviewerEmail  = [string](Get-SPSeriesProp $re 'ReviewerEmail' '')
+            $reviewerId     = [string]$re.ReviewerId
+            $reviewerEmail  = [string]$re.ReviewerEmail
             $reviewerSource = 'roster'
             $matched = $true
         }
     }
     if (-not $matched) {
-        $rb = Get-SPSeriesProp $raw 'reviewedBy'   # only read further when non-null
+        $rb = $raw.reviewedBy   # only read further when non-null
         if ($null -ne $rb) {
-            $rn = [string](Get-SPSeriesProp $rb 'name' '')
+            $rn = [string]$rb.name
             if (-not [string]::IsNullOrWhiteSpace($rn)) {
                 $reviewerName   = $rn
-                $reviewerId     = [string](Get-SPSeriesProp $rb 'id' '')
-                $reviewerEmail  = [string](Get-SPSeriesProp $rb 'email' '')
+                $reviewerId     = [string]$rb.id
+                $reviewerEmail  = [string]$rb.email
                 $reviewerSource = 'item'
                 $matched = $true
             }
@@ -821,9 +855,16 @@ function Get-SPSeriesAttestationDelta {
         [string]$NormalizedStem,
         [string]$PeriodType,
         [string]$IdentityProperty,
-        [string]$CorrelationID
+        [string]$CorrelationID,
+        [scriptblock]$ProgressCallback
     )
     try {
+        # Optional caller-supplied progress sink (keeps the engine itself IO-free): invoked
+        # with one message per resolved instance so long production runs are not silent.
+        $emitProgress = {
+            param([string]$Message)
+            if ($null -ne $ProgressCallback) { try { & $ProgressCallback $Message } catch { } }
+        }
         # --- 1. Sort instances ascending by OrderIndex; missing -> stable input order. -----------
         $indexed = New-Object System.Collections.Generic.List[object]
         $ii = 0
@@ -850,6 +891,8 @@ function Get-SPSeriesAttestationDelta {
         #   States = @{ ItemKey -> state } } (deduped per instance: prefer a genuinely-decided state).
         $instMaps = New-Object System.Collections.Generic.List[object]
         $unverifiedInstanceCount = 0
+        $instTotal = @($sorted).Count
+        $instDone = 0
         foreach ($entry in $sorted) {
             $inst = $entry.Inst
             $effOrder = if ($entry.HasOrder) { $entry.Order } else { $entry.InputIndex }
@@ -868,6 +911,9 @@ function Get-SPSeriesAttestationDelta {
             else {
                 $rawItems = @(Get-SPSeriesProp $inst 'Items')
                 $roster   = @(Get-SPSeriesProp $inst 'Roster')
+                # PERF: index the roster ONCE per instance -- resolving each item used to
+                # rebuild it, turning the walk O(items x roster) (hours at production scale).
+                $rosterIdx = New-SPSeriesRosterIndex -Roster $roster
                 foreach ($raw in $rawItems) {
                     if ($null -eq $raw) { continue }
                     # Do NOT force the CAMPAIGN id as the cert id: production rosters are keyed by the
@@ -876,23 +922,44 @@ function Get-SPSeriesAttestationDelta {
                     # campaign id would make the campaign id win, miss the roster lookup, and collapse
                     # every item to '(Unassigned)'. Let Resolve derive the per-item cert id from the
                     # wrapper so the sealed-roster join actually fires (cert-assigned reviewer wins).
-                    $st = Resolve-SPSeriesItemState -Item $raw -Roster $roster `
+                    $st = Resolve-SPSeriesItemState -Item $raw -Roster $roster -RosterIndex $rosterIdx `
                         -Unverified $instUnverified -Status $status
                     if ($null -ne $st) { $states.Add($st) }
                 }
             }
 
             # Skip blank ItemKey; dedupe a repeated key within this instance (prefer genuine decision).
+            # Direct member reads (StrictMode 1) -- this loop runs once per state per instance.
             $map = @{}
             foreach ($st in $states) {
-                $k = [string](Get-SPSeriesProp $st 'ItemKey' '')
+                $k = [string]$st.ItemKey
                 if ([string]::IsNullOrWhiteSpace($k)) { continue }
                 if (-not $map.ContainsKey($k)) { $map[$k] = $st }
                 else {
-                    $existing = $map[$k]
-                    $existingGenuine = [bool](Get-SPSeriesProp $existing 'IsGenuineDecision' $false)
-                    $candGenuine     = [bool](Get-SPSeriesProp $st 'IsGenuineDecision' $false)
-                    if ($candGenuine -and -not $existingGenuine) { $map[$k] = $st }
+                    if ([bool]$st.IsGenuineDecision -and -not [bool]($map[$k]).IsGenuineDecision) { $map[$k] = $st }
+                }
+            }
+
+            # Instance calendar date for first-approval reporting: the campaign's own
+            # period-token date (daily campaigns: the campaign's day; invariant-culture
+            # parse, matching ConvertTo-SPSeriesChronoKey), falling back to CachedAt.
+            # '' when neither resolves (e.g. synthetic test instances).
+            $instDate = ''
+            $ptok = [string](Get-SPSeriesProp $inst 'PeriodToken' '')
+            if (-not [string]::IsNullOrWhiteSpace($ptok)) {
+                $pdt = [datetime]::MinValue
+                if ([datetime]::TryParse($ptok, [System.Globalization.CultureInfo]::InvariantCulture,
+                                         [System.Globalization.DateTimeStyles]::None, [ref]$pdt)) {
+                    $instDate = $pdt.ToString('yyyy-MM-dd')
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($instDate)) {
+                $instCachedAt = [string](Get-SPSeriesProp $inst 'CachedAt' '')
+                if (-not [string]::IsNullOrWhiteSpace($instCachedAt)) {
+                    try {
+                        $instDate = ([datetime]::Parse($instCachedAt, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd')
+                    } catch { }
                 }
             }
 
@@ -902,9 +969,13 @@ function Get-SPSeriesAttestationDelta {
                     CampaignName        = $campaignName
                     Status              = $status
                     Unverified          = $instUnverified
+                    InstanceDate        = $instDate
                     States              = $map
                 })
+            $instDone++
+            & $emitProgress "instance $instDone/$instTotal resolved: $($map.Count) item key(s) -- $campaignName"
         }
+        & $emitProgress "classifying $(@($instMaps | ForEach-Object { $_.States.Count } | Measure-Object -Sum).Sum) state(s) across $instTotal instance(s)..."
 
         $n = $instMaps.Count
         $counts = [ordered]@{
@@ -940,52 +1011,73 @@ function Get-SPSeriesAttestationDelta {
             # Timeline across ALL instances (Present flag distinguishes a gap from a real entry).
             $timeline = New-Object System.Collections.Generic.List[object]
             $firstSeen = -1; $lastSeen = -1; $firstGenuineApproval = -1
+            $firstApprovalCampaign = ''; $firstApprovalDate = ''
             $itemUnverified = $false
             $anyGenuineDecisionAll = $false
             $hasApproved = $false; $hasRevoked = $false
             $latestPresentState = $null
+            # PERF: this loop runs O(itemKeys x instances) -- direct member reads instead of
+            # Get-SPSeriesProp (2 nested function calls each). The module runs StrictMode 1,
+            # so a missing member reads $null on BOTH hashtable and PSCustomObject states;
+            # [string]$null -> '' and [bool]$null -> $false reproduce the old defaults.
             foreach ($im in $instMaps) {
                 $present = $im.States.ContainsKey($key)
                 $st = if ($present) { $im.States[$key] } else { $null }
+                $stHonest = ''; $stGenApp = $false; $stAutoApp = $false; $stReviewer = ''; $stUnv = $false
                 if ($present) {
+                    $stHonest   = [string]$st.HonestDecision
+                    $stGenApp   = [bool]$st.IsGenuineApproval
+                    $stAutoApp  = [bool]$st.IsAutoApproved
+                    $stReviewer = [string]$st.ReviewerName
+                    $stUnv      = [bool]$st.Unverified
                     if ($firstSeen -lt 0) { $firstSeen = $im.EffectiveOrderIndex }
                     $lastSeen = $im.EffectiveOrderIndex
                     $latestPresentState = $st
-                    if ([bool](Get-SPSeriesProp $st 'Unverified' $false)) { $itemUnverified = $true }
-                    $genDec = [bool](Get-SPSeriesProp $st 'IsGenuineDecision' $false)
-                    if ($genDec) {
+                    if ($stUnv) { $itemUnverified = $true }
+                    if ([bool]$st.IsGenuineDecision) {
                         $anyGenuineDecisionAll = $true
-                        $hd = [string](Get-SPSeriesProp $st 'HonestDecision' '')
-                        if ($hd -eq 'Approved') { $hasApproved = $true }
-                        elseif ($hd -eq 'Revoked') { $hasRevoked = $true }
+                        if ($stHonest -eq 'Approved') { $hasApproved = $true }
+                        elseif ($stHonest -eq 'Revoked') { $hasRevoked = $true }
                     }
-                    if ($firstGenuineApproval -lt 0 -and [bool](Get-SPSeriesProp $st 'IsGenuineApproval' $false)) {
+                    if ($firstGenuineApproval -lt 0 -and $stGenApp) {
                         $firstGenuineApproval = $im.EffectiveOrderIndex
+                        $firstApprovalCampaign = [string]$im.CampaignName
+                        # First-approval DATE: the reviewer's own decision timestamp on the
+                        # item when present (the honest moment of approval), else the
+                        # instance's calendar date (the campaign's day for daily series).
+                        $fadRaw = [string]$st.DecisionDate
+                        if (-not [string]::IsNullOrWhiteSpace($fadRaw)) {
+                            try {
+                                $firstApprovalDate = ([datetime]::Parse($fadRaw, [System.Globalization.CultureInfo]::InvariantCulture,
+                                    [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd')
+                            } catch { $firstApprovalDate = $fadRaw }
+                        }
+                        if ([string]::IsNullOrWhiteSpace($firstApprovalDate)) { $firstApprovalDate = [string]$im.InstanceDate }
                     }
                 }
                 $timeline.Add([ordered]@{
                         OrderIndex        = [int]$im.EffectiveOrderIndex
                         CampaignId        = [string]$im.CampaignId
                         CampaignName      = [string]$im.CampaignName
-                        HonestDecision    = if ($present) { [string](Get-SPSeriesProp $st 'HonestDecision' '') } else { '' }
-                        IsGenuineApproval = if ($present) { [bool](Get-SPSeriesProp $st 'IsGenuineApproval' $false) } else { $false }
-                        IsAutoApproved    = if ($present) { [bool](Get-SPSeriesProp $st 'IsAutoApproved' $false) } else { $false }
-                        ReviewerName      = if ($present) { [string](Get-SPSeriesProp $st 'ReviewerName' '') } else { '' }
-                        Unverified        = if ($present) { [bool](Get-SPSeriesProp $st 'Unverified' $false) } else { $false }
+                        HonestDecision    = $stHonest
+                        IsGenuineApproval = $stGenApp
+                        IsAutoApproved    = $stAutoApp
+                        ReviewerName      = $stReviewer
+                        Unverified        = $stUnv
                         Present           = [bool]$present
                     })
             }
 
-            # Prior-only aggregates.
+            # Prior-only aggregates (direct member reads -- same StrictMode-1 rationale).
             $priorAnyGenuineDecision = $false
             $priorAnyGenuineApproval = $false
             $priorAnyAutoApproved    = $false
             foreach ($ps in $priorStates) {
-                if ([bool](Get-SPSeriesProp $ps 'IsGenuineDecision' $false)) { $priorAnyGenuineDecision = $true }
-                if ([bool](Get-SPSeriesProp $ps 'IsGenuineApproval' $false)) { $priorAnyGenuineApproval = $true }
-                if ([bool](Get-SPSeriesProp $ps 'IsAutoApproved' $false))    { $priorAnyAutoApproved = $true }
+                if ([bool]$ps.IsGenuineDecision) { $priorAnyGenuineDecision = $true }
+                if ([bool]$ps.IsGenuineApproval) { $priorAnyGenuineApproval = $true }
+                if ([bool]$ps.IsAutoApproved)    { $priorAnyAutoApproved = $true }
             }
-            $newestGenuineApproval = $presentNewest -and [bool](Get-SPSeriesProp $newestState 'IsGenuineApproval' $false)
+            $newestGenuineApproval = $presentNewest -and [bool]$newestState.IsGenuineApproval
 
             # Five independent facts (source of truth).
             $isNewlyInScope         = ((-not $presentPrior) -and $presentNewest)
@@ -1027,6 +1119,12 @@ function Get-SPSeriesAttestationDelta {
                 FirstSeenOrderIndex            = [int]$firstSeen
                 LastSeenOrderIndex             = [int]$lastSeen
                 FirstGenuineApprovalOrderIndex = [int]$firstGenuineApproval
+                # First-approval provenance (V4f): which campaign instance first carried a
+                # genuine approval for this grant, and when. Date = the item's own
+                # DecisionDate in that instance when available, else the instance's day.
+                # '' / -1 when the item has never been genuinely approved in the window.
+                FirstGenuineApprovalCampaign   = [string]$firstApprovalCampaign
+                FirstGenuineApprovalDate       = [string]$firstApprovalDate
                 CurrentHonestDecision          = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'HonestDecision' '') } else { '' }
                 CurrentIsGenuineApproval       = if ($null -ne $currentState) { [bool](Get-SPSeriesProp $currentState 'IsGenuineApproval' $false) } else { $false }
                 CurrentReviewerName            = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'ReviewerName' '') } else { '' }
@@ -1215,13 +1313,16 @@ function Get-SPSeriesInstanceCompletion {
             else { $flatItems.Add($el) }
         }
 
+        # PERF: index the roster ONCE for the whole instance (see New-SPSeriesRosterIndex).
+        $rosterIdxIc = New-SPSeriesRosterIndex -Roster $Roster
+
         foreach ($w in $flatItems) {
             if ($null -eq $w) { continue }
 
             # (1) Honest per-item decision via the shared classifier (guarded).
             $honest = 'Undecided'; $srcName = ''
             if ($canResolve) {
-                $state = Resolve-SPSeriesItemState -Item $w -Roster $Roster -Unverified $Unverified -Status $Status
+                $state = Resolve-SPSeriesItemState -Item $w -Roster $Roster -RosterIndex $rosterIdxIc -Unverified $Unverified -Status $Status
                 if ($null -ne $state) {
                     $honest  = [string](Get-SPSeriesProp $state 'HonestDecision' 'Undecided')
                     $srcName = [string](Get-SPSeriesProp $state 'SourceName' '')

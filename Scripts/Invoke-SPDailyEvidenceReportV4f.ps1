@@ -1,10 +1,12 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Generates the V4e series attestation delta report -- the SAME series-aware, honest
+    Generates the V4f series attestation delta report -- V4e plus the Approved Items
+    First-Approval Timeline: WHEN each currently-approved grant was first genuinely
+    approved, and WHICH grants became approved mid-window ('newly approved'). Same
     "newly attested" decision-transition analysis as V4c, rendered in the V4/V4b
     visual family (gradient header, sectioned layout, collapsible tables)
-    (output: daily-evidence-v4e-*.html).
+    (output: daily-evidence-v4f-*.html).
 .DESCRIPTION
     V4e is a READ-ONLY report. It reads ONLY the rich audit cache
     (items-<id>.jsonl + items-<id>.meta.json + roster-<id>.json) -- it never
@@ -75,19 +77,19 @@
 .PARAMETER Help
     Display detailed help.
 .EXAMPLE
-    .\Invoke-SPDailyEvidenceReportV4e.ps1
+    .\Invoke-SPDailyEvidenceReportV4f.ps1
     # Auto-derive every recurring series from the cache and render the delta (V4b look).
 .EXAMPLE
-    .\Invoke-SPDailyEvidenceReportV4e.ps1 -SeriesName 'Access Review' -OutputMode HTML
+    .\Invoke-SPDailyEvidenceReportV4f.ps1 -SeriesName 'Access Review' -OutputMode HTML
     # Force a single series stem and write only the HTML report.
 .EXAMPLE
-    .\Invoke-SPDailyEvidenceReportV4e.ps1 -SimilarityThreshold 0.15 -IncludeUnverified
+    .\Invoke-SPDailyEvidenceReportV4f.ps1 -SimilarityThreshold 0.15 -IncludeUnverified
     # Opt-in fuzzy stem merge; include Unverified items with a badge.
 .EXAMPLE
-    .\Invoke-SPDailyEvidenceReportV4e.ps1 -Window 2 -OutputMode Console
+    .\Invoke-SPDailyEvidenceReportV4f.ps1 -Window 2 -OutputMode Console
     # Narrow each series to its two newest instances (today vs yesterday single-day diff).
 .NOTES
-    Script:  Invoke-SPDailyEvidenceReportV4e.ps1
+    Script:  Invoke-SPDailyEvidenceReportV4f.ps1
     Version: 1.0.0
 #>
 [CmdletBinding()]
@@ -202,7 +204,7 @@ if ($cfgPath) {
 
 Write-Host ''
 Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
-Write-Host '  Daily Evidence Report (v4e) -- Series Attestation Delta' -ForegroundColor Cyan
+Write-Host '  Daily Evidence Report (v4f) -- Series Attestation Delta + First-Approval Timeline' -ForegroundColor Cyan
 Write-Host "  Date:          $todayLabel" -ForegroundColor DarkGray
 Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
 Write-Host ''
@@ -212,8 +214,8 @@ try {
 } catch { }
 
 try {
-    Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4e started: CorrelationID=$correlationID MinInstances=$MinInstances SimilarityThreshold=$SimilarityThreshold Window=$Window" `
-        -Severity INFO -Component 'DailyEvidenceV4e' -Action 'Start' -CorrelationID $correlationID
+    Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4f started: CorrelationID=$correlationID MinInstances=$MinInstances SimilarityThreshold=$SimilarityThreshold Window=$Window" `
+        -Severity INFO -Component 'DailyEvidenceV4f' -Action 'Start' -CorrelationID $correlationID
 } catch { }
 
 # Resolve output path (mirrors the V6 OutputPath-resolution region).
@@ -272,7 +274,7 @@ try {
 } catch {
     Write-Host "  ERROR: Series reader threw: $($_.Exception.Message)" -ForegroundColor Red
     try {
-        Write-SPLog -Message "V4e reader threw: $($_.Exception.Message)" -Severity ERROR -Component 'DailyEvidenceV4e' -Action 'Read' -CorrelationID $correlationID
+        Write-SPLog -Message "V4e reader threw: $($_.Exception.Message)" -Severity ERROR -Component 'DailyEvidenceV4f' -Action 'Read' -CorrelationID $correlationID
     } catch { }
     exit 4
 }
@@ -281,7 +283,7 @@ if ($null -eq $seriesRes -or -not $seriesRes.Success) {
     $errMsg = if ($null -ne $seriesRes) { [string]$seriesRes.Error } else { 'null result' }
     Write-Host "  ERROR: Series reader failed: $errMsg" -ForegroundColor Red
     try {
-        Write-SPLog -Message "V4e reader failed: $errMsg" -Severity WARN -Component 'DailyEvidenceV4e' -Action 'Read' -CorrelationID $correlationID
+        Write-SPLog -Message "V4e reader failed: $errMsg" -Severity WARN -Component 'DailyEvidenceV4f' -Action 'Read' -CorrelationID $correlationID
     } catch { }
     exit 4
 }
@@ -350,7 +352,7 @@ if ($SimilarityThreshold -gt 0 -and $seriesList.Count -gt 1) {
             Write-Host "    Merged near-match stems into '$($firstCs.NormalizedStem)': $mergedStems" -ForegroundColor DarkGray
             try {
                 Write-SPLog -Message "V4e fuzzy merge -> '$($firstCs.NormalizedStem)' from: $mergedStems" `
-                    -Severity INFO -Component 'DailyEvidenceV4e' -Action 'FuzzyMerge' -CorrelationID $correlationID
+                    -Severity INFO -Component 'DailyEvidenceV4f' -Action 'FuzzyMerge' -CorrelationID $correlationID
             } catch { }
         }
         $seriesList = @($merged.ToArray())
@@ -529,7 +531,7 @@ $seriesDataList = @($seriesResults.ToArray())
 
 $genDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm UTC')
 $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
-$htmlFile = Join-Path $effectiveOutputPath "daily-evidence-v4e-$timestamp.html"
+$htmlFile = Join-Path $effectiveOutputPath "daily-evidence-v4f-$timestamp.html"
 
 # V4b HTML-escape helper (verbatim from V4b): wraps ConvertTo-SPHtmlSafe; null/whitespace -> ''.
 # The verbatim-V4b section copies (later items) call ConvertTo-SafeHtml, so it must resolve here.
@@ -1136,6 +1138,79 @@ if ($seriesDataList.Count -gt 0) {
     [void]$sb.AppendLine('</div>')
 }
 
+# ---- C. Approved Items -- First-Approval Timeline (V4f addition) -------------------------
+# Answers two leadership questions V4e could not: (1) WHICH currently-approved grants are
+# NEWLY approved (first genuine approval happened mid-window rather than carried from the
+# window's first instance), and (2) WHEN each approved grant was FIRST genuinely approved.
+# Date source: the reviewer's own DecisionDate on the item in the first genuinely-approving
+# instance (the honest moment of approval), falling back to that instance's calendar day.
+# For a daily series, carried items date to the window's first campaign day (typically the
+# 1st of the month); newly approved items date mid-month -- exactly the split requested.
+if ($seriesDataList.Count -gt 0) {
+    [void]$sb.AppendLine('<div class="section"><h2>C. Approved Items -- First-Approval Timeline</h2>')
+    foreach ($sd in $seriesDataList) {
+        [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))) + '</div>')
+
+        # SAME Test-V4eItemShown gate as the donut / Section A / JSON (honesty reconciliation).
+        $faAll = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+        $faShown = @($faAll | Where-Object { Test-V4eItemShown $_ })
+
+        # Currently-approved grants only (newest instance carries a genuine approval).
+        $faApproved = @($faShown | Where-Object {
+            [bool](Get-SPObjectProperty -Object $_ -Name 'CurrentIsGenuineApproval' -Default $false)
+        })
+
+        # Window start = earliest instance any shown item was seen in; a first approval in a
+        # LATER instance means the grant became approved mid-window ("newly approved").
+        $faWindowStart = -1
+        foreach ($it in $faShown) {
+            $fs = [int](Get-SPObjectProperty -Object $it -Name 'FirstSeenOrderIndex' -Default -1)
+            if ($fs -ge 0 -and ($faWindowStart -lt 0 -or $fs -lt $faWindowStart)) { $faWindowStart = $fs }
+        }
+
+        $faCarried = [System.Collections.Generic.List[object]]::new()
+        $faNewly   = [System.Collections.Generic.List[object]]::new()
+        foreach ($it in $faApproved) {
+            $fga = [int](Get-SPObjectProperty -Object $it -Name 'FirstGenuineApprovalOrderIndex' -Default -1)
+            if ($fga -ge 0 -and $faWindowStart -ge 0 -and $fga -gt $faWindowStart) { $faNewly.Add($it) } else { $faCarried.Add($it) }
+        }
+
+        [void]$sb.AppendLine("<p style='font-size:12px;color:#555'>Currently approved (genuine, deduplicated by grant): <b>$($faApproved.Count)</b> &mdash; " +
+            "approved since the window start: <b>$($faCarried.Count)</b> &middot; <span style='color:#0a7d2c;font-weight:700'>newly approved mid-window: $($faNewly.Count)</span></p>")
+
+        # Newly-approved detail first (the actionable list), then the carried list collapsed.
+        foreach ($bucket in @(
+            @{ Label = "Newly approved mid-window ($($faNewly.Count))";      Items = $faNewly;   Open = ' open' },
+            @{ Label = "Approved since window start ($($faCarried.Count))";  Items = $faCarried; Open = '' }
+        )) {
+            [void]$sb.AppendLine("<details$($bucket.Open)><summary>$(ConvertTo-SafeHtml $bucket.Label)</summary>")
+            if (@($bucket.Items).Count -eq 0) {
+                [void]$sb.AppendLine('<p style="color:#777;font-size:12px">None.</p>')
+            }
+            else {
+                [void]$sb.AppendLine('<table class="report"><thead><tr><th>First Approved</th><th>Identity</th><th>Access</th><th>Source</th><th>First-Approval Campaign</th><th>Reviewer</th></tr></thead><tbody>')
+                $faSorted = @($bucket.Items | Sort-Object -Property @{ Expression = { [string](Get-SPObjectProperty -Object $_ -Name 'FirstGenuineApprovalDate' -Default '9999-99-99') } }, `
+                                                                     @{ Expression = { [string](Get-SPObjectProperty -Object $_ -Name 'IdentityName' -Default '') } })
+                foreach ($it in $faSorted) {
+                    $fad = [string](Get-SPObjectProperty -Object $it -Name 'FirstGenuineApprovalDate' -Default '')
+                    if ([string]::IsNullOrWhiteSpace($fad)) { $fad = '(no date)' }
+                    [void]$sb.AppendLine('<tr>' +
+                        "<td style='white-space:nowrap'>$(ConvertTo-SafeHtml $fad)</td>" +
+                        "<td>$(ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default '')))</td>" +
+                        "<td>$(ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default '')))</td>" +
+                        "<td>$(ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default '')))</td>" +
+                        "<td style='font-size:11px'>$(ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'FirstGenuineApprovalCampaign' -Default '')))</td>" +
+                        "<td>$(ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'CurrentReviewerName' -Default '')))</td>" +
+                        '</tr>')
+                }
+                [void]$sb.AppendLine('</tbody></table>')
+            }
+            [void]$sb.AppendLine('</details>')
+        }
+    }
+    [void]$sb.AppendLine('</div>')
+}
+
 # ---- Decision Summary (V4b Decision-Summary chrome, rebound to series classifications) ----
 # TWO V4b-style <details> collapsibles per series: Decision Changes (genuine decision flipped)
 # and Newly In Scope (absent from all priors, present in the newest). Both are FILTERED by
@@ -1265,7 +1340,7 @@ if ($OutputMode -eq 'JSON' -or $OutputMode -eq 'Both') {
         $jsonResult | ConvertTo-Json -Depth 8
     }
     else {
-        $jsonFile = Join-Path $effectiveOutputPath "daily-evidence-v4e-$timestamp.json"
+        $jsonFile = Join-Path $effectiveOutputPath "daily-evidence-v4f-$timestamp.json"
         $jsonResult | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonFile -Encoding UTF8
         Write-Host "    JSON: $jsonFile" -ForegroundColor Green
     }
@@ -1281,7 +1356,7 @@ Write-Host "  Duration: $durationStr" -ForegroundColor DarkGray
 
 try {
     Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4e completed: Duration=$durationStr Series=$($seriesDataList.Count)" `
-        -Severity INFO -Component 'DailyEvidenceV4e' -Action 'Complete' -CorrelationID $correlationID
+        -Severity INFO -Component 'DailyEvidenceV4f' -Action 'Complete' -CorrelationID $correlationID
 } catch { }
 
 #endregion
