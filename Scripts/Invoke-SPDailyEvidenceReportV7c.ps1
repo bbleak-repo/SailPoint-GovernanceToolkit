@@ -407,6 +407,7 @@ if ([string]::IsNullOrWhiteSpace($filterEndDate)) {
 Write-Host "    Date range: $filterStartDate to $filterEndDate" -ForegroundColor DarkGray
 
 $allRecords = [System.Collections.Generic.List[object]]::new()
+$corruptLines = 0
 
 $rawLines = [System.IO.File]::ReadAllLines($jsonlPath, $utf8)
 foreach ($ln in $rawLines) {
@@ -437,10 +438,13 @@ foreach ($ln in $rawLines) {
         }
 
         $allRecords.Add($rec)
-    } catch { }
+    } catch { $corruptLines++ }
 }
 
 Write-Host "    Loaded $($allRecords.Count) record(s) within ${effectiveDaysBack}-day window" -ForegroundColor DarkGray
+if ($corruptLines -gt 0) {
+    Write-Host "    WARN: $corruptLines unparseable JSONL line(s) skipped -- records may be missing from this report." -ForegroundColor Yellow
+}
 
 if ($allRecords.Count -eq 0) {
     Write-Host '' -ForegroundColor Red
@@ -456,15 +460,23 @@ if ($allRecords.Count -eq 0) {
     exit 5
 }
 
-# Data coverage warning: if actual date span is narrower than requested window
+# Data coverage warning: fires whenever the actual data span is narrower than the
+# REQUESTED window (explicit -StartDate/-EndDate included) -- the old gate only
+# warned past 7 days AND below 50% coverage, so a default run over one day of
+# data, or a 30-day request with 16 days, warned about nothing.
 $actualDates = @($allRecords | ForEach-Object { [string]$_.captureDate } | Sort-Object -Unique)
 if ($actualDates.Count -gt 0) {
     $actualStart = $actualDates[0]
     $actualEnd   = $actualDates[$actualDates.Count - 1]
-    $actualSpanDays = ([datetime]::Parse($actualEnd) - [datetime]::Parse($actualStart)).Days + 1
-    if ($actualSpanDays -lt ($effectiveDaysBack * 0.5) -and $effectiveDaysBack -gt 7) {
+    $invCul = [System.Globalization.CultureInfo]::InvariantCulture
+    $actualSpanDays = ([datetime]::ParseExact($actualEnd, 'yyyy-MM-dd', $invCul) - [datetime]::ParseExact($actualStart, 'yyyy-MM-dd', $invCul)).Days + 1
+    $requestedSpanDays = $effectiveDaysBack
+    try {
+        $requestedSpanDays = ([datetime]::ParseExact($filterEndDate, 'yyyy-MM-dd', $invCul) - [datetime]::ParseExact($filterStartDate, 'yyyy-MM-dd', $invCul)).Days + 1
+    } catch { }
+    if ($actualSpanDays -lt $requestedSpanDays) {
         Write-Host '' -ForegroundColor Yellow
-        Write-Host "    DATA COVERAGE WARNING: Requested ${effectiveDaysBack}-day window but data only" -ForegroundColor Yellow
+        Write-Host "    DATA COVERAGE WARNING: Requested window covers $requestedSpanDays day(s) but data only" -ForegroundColor Yellow
         Write-Host "    spans $actualStart to $actualEnd ($actualSpanDays day(s), $($actualDates.Count) data point(s))." -ForegroundColor Yellow
         Write-Host '    Run V4b daily while campaigns are ACTIVE to accumulate more data points.' -ForegroundColor Yellow
         Write-Host ''
@@ -479,18 +491,27 @@ Write-Host ''
 
 Write-Host '  Step 2: Calendar-day resolution' -ForegroundColor Cyan
 
-# Step 2a: Detect suspect records (pre-fix inflated data)
+# Step 2a: Detect suspect records (pre-fix inflated data).
+# schemaVersion gate: V4b stamps schemaVersion=2 on records whose counts are
+# CANONICAL (idNowAutoApproved force-signs are demoted to Pending at write time).
+# A v2+ COMPLETED record with pending=0 / ~100% therefore means the reviewers
+# GENUINELY finished -- the inflated-data signature is impossible by
+# construction, so v2+ records are never flagged suspect. Only legacy
+# (unstamped) records can carry pre-canonical inflated counts.
 $suspectCount = 0
 foreach ($rec in $allRecords) {
     $recIsSuspect = $false
     try {
-        $campStatus = [string]$rec.campaign.status
-        $sm = $rec.summary
-        $pendingVal = [int](Get-V7NumericProp $sm 'pending' 0)
-        $compPct = [double](Get-V7NumericProp $sm 'completionPct' 0)
-        if ($campStatus -eq 'COMPLETED' -and $pendingVal -eq 0 -and $compPct -ge 99.5) {
-            $recIsSuspect = $true
-            $suspectCount++
+        $schemaV = [int](Get-V7NumericProp $rec 'schemaVersion' 0)
+        if ($schemaV -lt 2) {
+            $campStatus = [string]$rec.campaign.status
+            $sm = $rec.summary
+            $pendingVal = [int](Get-V7NumericProp $sm 'pending' 0)
+            $compPct = [double](Get-V7NumericProp $sm 'completionPct' 0)
+            if ($campStatus -eq 'COMPLETED' -and $pendingVal -eq 0 -and $compPct -ge 99.5) {
+                $recIsSuspect = $true
+                $suspectCount++
+            }
         }
     } catch { }
     # Tag the record
@@ -743,6 +764,62 @@ foreach ($dk in $dayKeys) {
     $dailyData += $calendarDays[$dk]
 }
 
+# ---------------------------------------------------------------------------
+# RECONCILIATION GUARD: what the report will DISPLAY must add up to what the
+# JSONL actually CONTAINS for this window. The pre-fix suspect filter silently
+# deleted 18 of 22 June days in production (the '399 missing revokes' bug,
+# docs/BUG-V7-REVOKED-GAP-20260710.md) and nothing in the output said so.
+# Truth basis: all in-window records deduped by captureDate|campaignId keeping
+# the latest captureTimestamp (mirrors V4b's own write-dedup). Every truth
+# record NOT represented in $dailyData is listed with its counts and a reason,
+# and the total delta is printed -- silent loss is now structurally impossible.
+# ---------------------------------------------------------------------------
+$truthByKey = @{}
+foreach ($rec in $allRecords) {
+    $tKey = "$([string]$rec.captureDate)|$([string]$rec.campaign.id)"
+    if (-not $truthByKey.ContainsKey($tKey) -or
+        ([string]$rec.captureTimestamp) -gt ([string]$truthByKey[$tKey].captureTimestamp)) {
+        $truthByKey[$tKey] = $rec
+    }
+}
+$truthRevoked = 0; $truthApproved = 0; $truthPending = 0
+foreach ($rec in $truthByKey.Values) {
+    $truthRevoked  += [int](Get-V7NumericProp $rec.summary 'revoked' 0)
+    $truthApproved += [int](Get-V7NumericProp $rec.summary 'approved' 0)
+    $truthPending  += [int](Get-V7NumericProp $rec.summary 'pending' 0)
+}
+$shownKeys = @{}
+$shownRevoked = 0; $shownApproved = 0; $shownPending = 0
+foreach ($d in $dailyData) {
+    $shownKeys["$($d.Date)|$($d.CampaignId)"] = $true
+    $shownRevoked  += [int]$d.Revoked
+    $shownApproved += [int]$d.Approved
+    $shownPending  += [int]$d.Pending
+}
+if ($shownRevoked -ne $truthRevoked -or $shownApproved -ne $truthApproved -or $shownPending -ne $truthPending) {
+    Write-Host "    RECONCILIATION WARNING: displayed day set does not account for all in-window JSONL records." -ForegroundColor Red
+    Write-Host "      JSONL truth (deduped): approved=$truthApproved revoked=$truthRevoked pending=$truthPending" -ForegroundColor Red
+    Write-Host "      Report will display:   approved=$shownApproved revoked=$shownRevoked pending=$shownPending" -ForegroundColor Red
+    Write-Host "      Delta: revoked $($truthRevoked - $shownRevoked), approved $($truthApproved - $shownApproved), pending $($truthPending - $shownPending)" -ForegroundColor Red
+    foreach ($tKey in ($truthByKey.Keys | Sort-Object)) {
+        if ($shownKeys.ContainsKey($tKey)) { continue }
+        $rec = $truthByKey[$tKey]
+        $reason = 'not represented after calendar-day resolution'
+        $isSusp = $false; try { $isSusp = [bool]$rec._isSuspect } catch { }
+        if ($isSusp) { $reason = 'suspect record superseded by an honest same-day capture' }
+        elseif ($shownKeys.Keys -match ('^' + [regex]::Escape([string]$rec.captureDate) + '\|')) {
+            $reason = 'same-day sibling campaign dropped by one-record-per-day resolution'
+        }
+        Write-Host ("      EXCLUDED: {0} '{1}' (approved={2} revoked={3} pending={4}) -- {5}" -f `
+            [string]$rec.captureDate, [string]$rec.campaign.name, `
+            [int](Get-V7NumericProp $rec.summary 'approved' 0), [int](Get-V7NumericProp $rec.summary 'revoked' 0), `
+            [int](Get-V7NumericProp $rec.summary 'pending' 0), $reason) -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "    Reconciliation OK: displayed totals match in-window JSONL (approved=$truthApproved revoked=$truthRevoked pending=$truthPending)" -ForegroundColor DarkGreen
+}
+
 # Build reviewer list (distinct across all days, sorted alphabetically)
 $reviewerNames = [ordered]@{}
 foreach ($d in $dailyData) {
@@ -760,6 +837,7 @@ foreach ($rn in ($reviewerNames.Keys | Sort-Object)) {
     [double]$firstComp = -1; [double]$lastComp = 0; $firstSeenIdx = -1
     [double]$yesterdayComp = 0; $lastSeenIdx = -1; $latestSigned = $false
     [string]$firstSeenDate = 'N/A'
+    [string]$lastSeenDate = 'N/A'; [int]$lastPending = 0; [int]$lastTotal = 0
     for ($di = 0; $di -lt $dailyData.Count; $di++) {
         $rvDay = $null
         foreach ($r in $dailyData[$di].Reviewers) {
@@ -775,6 +853,9 @@ foreach ($rn in ($reviewerNames.Keys | Sort-Object)) {
             if ($di -eq ($dailyData.Count - 2)) { $yesterdayComp = $compVal }
             $lastComp = $compVal
             $lastSeenIdx = $di
+            $lastSeenDate = $dailyData[$di].DayLabel
+            $lastPending = [int]$rvDay.Pending
+            $lastTotal   = [int]$rvDay.Total
             # Track signed status from latest appearance
             $isSigned = $false
             try { $isSigned = [bool]$rvDay.Signed } catch { }
@@ -784,9 +865,16 @@ foreach ($rn in ($reviewerNames.Keys | Sort-Object)) {
     if ($firstComp -lt 0) { $firstComp = 0 }
     $daysInScope = if ($firstSeenIdx -ge 0 -and $lastSeenIdx -ge 0) { $lastSeenIdx - $firstSeenIdx + 1 } else { 1 }
 
+    # Absence semantics (daily campaigns): a reviewer NOT present in the newest
+    # day's campaign has nothing to attest today -- their items completed, were
+    # revoked, or moved. They must never classify as stalled/slow from here on.
+    $presentLatest = ($lastSeenIdx -eq ($dailyData.Count - 1))
+
     [double]$delta = $lastComp - $firstComp
     $rvStyle = 'steady'
     if ($latestSigned -or $lastComp -ge 95) { $rvStyle = 'finishing' }
+    elseif (-not $presentLatest) { $rvStyle = 'out-of-scope' }
+    elseif ($lastTotal -eq 0) { $rvStyle = 'steady' }   # zero items today: nothing to stall on
     elseif ($lastComp -lt 5 -and $daysInScope -ge 3) { $rvStyle = 'stalled' }
     elseif ($delta -ge 10) { $rvStyle = 'steady' }
     elseif ($delta -lt 5 -and $lastComp -lt 90) { $rvStyle = 'slow' }
@@ -799,6 +887,11 @@ foreach ($rn in ($reviewerNames.Keys | Sort-Object)) {
         Style               = $rvStyle
         FirstSeenIdx        = $firstSeenIdx
         FirstSeenDate       = $firstSeenDate
+        LastSeenIdx         = $lastSeenIdx
+        LastSeenDate        = $lastSeenDate
+        LastPending         = $lastPending
+        LastTotal           = $lastTotal
+        PresentLatest       = $presentLatest
     }
 }
 
@@ -879,11 +972,22 @@ if ($hasCampaignSeries) {
     if ($null -ne $seriesRes -and $seriesRes.Success -and $seriesRes.Data.SeriesCount -gt 0) {
         Write-Host "    Found $($seriesRes.Data.SeriesCount) series ($($seriesRes.Data.InstanceCount) instances)" -ForegroundColor DarkGray
 
-        # Aggregate honest decision counts across all series
+        # Honor the campaign name filter: the series cache is tenant-wide, and a report
+        # filtered to one campaign must not show tenant-wide entitlement totals that
+        # cannot reconcile with the rest of the page.
+        $chartSeries = @($seriesRes.Data.Series)
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $chartSeries = @($chartSeries | Where-Object {
+                ([string]$_.NormalizedStem).IndexOf($CampaignNameContains, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            })
+            Write-Host "    Campaign filter narrows Chart 15 to $($chartSeries.Count) series" -ForegroundColor DarkGray
+        }
+
+        # Aggregate honest decision counts across the (possibly filtered) series
         $honestApproved = 0; $honestRevoked = 0; $honestUndecided = 0; $honestTotal = 0
         $seriesBreakdown = [System.Collections.Generic.List[object]]::new()
 
-        foreach ($series in @($seriesRes.Data.Series)) {
+        foreach ($series in $chartSeries) {
             # Materialize instances
             $deltaInstances = [System.Collections.Generic.List[object]]::new()
             foreach ($inst in @($series.Instances)) {
@@ -948,7 +1052,7 @@ if ($hasCampaignSeries) {
                 Undecided    = $honestUndecided
                 Total        = $honestTotal
                 Series       = @($seriesBreakdown)
-                SeriesCount  = $seriesRes.Data.SeriesCount
+                SeriesCount  = @($seriesBreakdown).Count   # the rendered set, not the tenant-wide cache count
             }
             Write-Host "    Honest decisions: Approved=$honestApproved Revoked=$honestRevoked Undecided=$honestUndecided (Total=$honestTotal)" -ForegroundColor DarkGray
         }
@@ -1010,6 +1114,9 @@ tr:nth-child(even) td{background:#f6f9fc;}
 .delta-up{color:#0a7d2c;font-weight:600;}
 .delta-down{color:#b00020;font-weight:600;}
 .delta-flat{color:#9a6700;}
+.s-red{color:#b00020;font-weight:600;}
+.s-amber{color:#9a6700;font-weight:600;}
+.s-green{color:#0a7d2c;font-weight:600;}
 .footer{margin-top:24px;padding-top:8px;border-top:1px solid #d4dce6;font-size:11px;color:#777;}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;color:#fff;margin-left:6px;vertical-align:middle;}
 .badge-red{background:#b00020;}
@@ -1133,7 +1240,7 @@ elseif ($dayCount -ge 2 -and $isOverdue) {
 if ($insufficientData) {
     [void]$sb.AppendLine("<div class='section' style='background:#fff7e6;border-color:#ffd97a;'>")
     [void]$sb.AppendLine("<div class='section-title' style='color:#7a5a00;'>Insufficient Trend Data</div>")
-    [void]$sb.AppendLine("<p style='color:#7a5a00;font-size:13px;'>Only $dayCount calendar day(s) available. Multi-day progression charts require at least 2 captures on different days. Below shows today's snapshot data only. Run V4 daily to accumulate the series.</p>")
+    [void]$sb.AppendLine("<p style='color:#7a5a00;font-size:13px;'>Only $dayCount calendar day(s) available. Multi-day progression charts require at least 2 captures on different days. Below shows today's snapshot data only. Run V4b daily to accumulate the series.</p>")
     [void]$sb.AppendLine("</div>")
 }
 
@@ -1256,7 +1363,7 @@ if ($dayCount -ge 2) {
 if ($reviewerList.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
     [void]$sb.AppendLine("<div class='section-title'>Per-Reviewer Accountability -- Numeric Comparison with Direction</div>")
-    [void]$sb.AppendLine("<p class='note'>Shows each reviewer's completion across the calendar-day window with direction arrows. First-seen date is the calendar day the reviewer first appeared. Stalled reviewers (zero change) highlighted in red.</p>")
+    [void]$sb.AppendLine("<p class='note'>Shows each reviewer's completion across the calendar-day window with direction arrows. First-seen date is the calendar day the reviewer first appeared. Stalled reviewers (in today's campaign with no progress) highlighted in red. '--' = not in that day's campaign (nothing to attest); reviewers who completed and left scope are marked green, never stalled.</p>")
 
     [void]$sb.AppendLine("<table><thead><tr><th>Reviewer</th><th style='text-align:right;'>First</th><th style='text-align:right;'>Yesterday</th><th style='text-align:right;'>Today</th><th style='text-align:center;'>Direction</th><th style='text-align:right;'>Change</th><th>Status</th><th style='font-size:10px;'>First Seen</th></tr></thead><tbody>")
     $rvIdx = 0
@@ -1281,30 +1388,50 @@ if ($reviewerList.Count -gt 0) {
             }
         }
 
-        [double]$todayPct = if ($null -ne $todayRvData) { [double]$todayRvData.Completion } else { 0 }
+        # ABSENCE IS NOT INACTION (daily campaigns): a reviewer missing from a day's
+        # campaign had nothing to attest that day. Absent cells render '--' instead of
+        # a fabricated 0%, and an absent-from-today reviewer can never be STALLED --
+        # previously a reviewer who FINISHED early (and thus left scope) rendered as
+        # 'STALLED 0%' with a red row for the rest of the window.
+        $presentToday = ($null -ne $todayRvData)
+        [double]$todayPct = if ($presentToday) { [double]$todayRvData.Completion } else { [double]$rv.LastCompletion }
         [double]$yestPct  = if ($null -ne $yestRvData) { [double]$yestRvData.Completion } else { 0 }
         [double]$firstPct = if ($null -ne $firstRvData) { [double]$firstRvData.Completion } else { 0 }
         $todayPct = [math]::Max(0, [math]::Min(100, $todayPct))
         $yestPct  = [math]::Max(0, [math]::Min(100, $yestPct))
         $firstPct = [math]::Max(0, [math]::Min(100, $firstPct))
+        $todayCell = if ($presentToday) { "${todayPct}%" } else { '--' }
+        $yestCell  = if ($null -ne $yestRvData) { "${yestPct}%" } else { '--' }
 
         [double]$deltaRv = [math]::Round($todayPct - $firstPct, 1)
+        if (-not $presentToday) { $deltaRv = 0 }
         $arrow = if ($deltaRv -gt 2) { "<span class='up-arrow'></span>" } elseif ($deltaRv -lt -2) { "<span class='down-arrow'></span>" } else { "<span class='flat-line'></span>" }
         $dClass = if ($deltaRv -gt 2) { 'delta-up' } elseif ($deltaRv -lt -2) { 'delta-down' } else { 'delta-flat' }
         $dSignRv = if ($deltaRv -gt 0) { '+' } else { '' }
+        $deltaCell = if ($presentToday) { "${dSignRv}${deltaRv}%" } else { '--' }
 
         $rvStatusHtml = ''
-        if ($todayPct -ge 100) { $rvStatusHtml = "<span style='color:$($colors.Green);font-weight:600;'>Complete</span>" }
-        elseif ($deltaRv -lt 1 -and $todayPct -lt 95) { $rvStatusHtml = "<span style='color:$($colors.Red);font-weight:600;'>STALLED</span>" }
+        $isStalledRow = $false
+        if (-not $presentToday) {
+            if ($rv.LastCompletion -ge 100 -or $rv.LastPending -eq 0) {
+                $rvStatusHtml = "<span style='color:$($colors.Green);'>Completed -- out of scope since $($rv.LastSeenDate)</span>"
+            }
+            else {
+                $rvStatusHtml = "<span style='color:#777;'>Out of scope since $($rv.LastSeenDate) (items moved/revoked)</span>"
+            }
+        }
+        elseif ([int]$todayRvData.Total -eq 0) { $rvStatusHtml = "<span style='color:#777;'>No items today</span>" }
+        elseif ($todayPct -ge 100) { $rvStatusHtml = "<span style='color:$($colors.Green);font-weight:600;'>Complete</span>" }
+        elseif ($deltaRv -lt 1 -and $todayPct -lt 95) { $rvStatusHtml = "<span style='color:$($colors.Red);font-weight:600;'>STALLED</span>"; $isStalledRow = $true }
         elseif ($deltaRv -lt 5) { $rvStatusHtml = "<span style='color:$($colors.Amber);'>Slow</span>" }
         else { $rvStatusHtml = "<span style='color:$($colors.Green);'>On Track</span>" }
 
         $firstSeenLabel = $rv.FirstSeenDate
         $scopeStyle = if ($rv.FirstSeenIdx -gt 0) { "color:$($colors.Amber);font-weight:600;" } else { 'color:#888;' }
 
-        $bg = if ($deltaRv -lt 1 -and $todayPct -lt 95) { " style='background:#fdecec;'" } elseif ($rvIdx % 2 -eq 1) { " style='background:#f6f9fc;'" } else { '' }
+        $bg = if ($isStalledRow) { " style='background:#fdecec;'" } elseif ($rvIdx % 2 -eq 1) { " style='background:#f6f9fc;'" } else { '' }
         $rvNameSafe = ConvertTo-SPHtmlSafe $rv.Name
-        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvNameSafe</td><td style='text-align:right;color:#888;'>${firstPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSignRv}${deltaRv}%</td><td>$rvStatusHtml</td><td style='font-size:10px;$scopeStyle'>$firstSeenLabel</td></tr>")
+        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvNameSafe</td><td style='text-align:right;color:#888;'>${firstPct}%</td><td style='text-align:right;'>$yestCell</td><td style='text-align:right;font-weight:600;'>$todayCell</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>$deltaCell</td><td>$rvStatusHtml</td><td style='font-size:10px;$scopeStyle'>$firstSeenLabel</td></tr>")
         $rvIdx++
     }
     [void]$sb.AppendLine("</tbody></table></div>")
@@ -1317,7 +1444,7 @@ if ($reviewerList.Count -gt 0) {
 if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
     [void]$sb.AppendLine("<div class='section-title'>Reviewer Activity Heatmap -- ${dayCount}-Day Decision Intensity</div>")
-    [void]$sb.AppendLine("<p class='note'>Rows = reviewers, Columns = calendar days. Cell value = decisions made on that day's campaign. Five-level blue scale. Inactive reviewers (zero decisions) highlighted in light red.</p>")
+    [void]$sb.AppendLine("<p class='note'>Rows = reviewers, Columns = calendar days. Cell value = decisions made on that day's campaign. Five-level blue scale. Dotted cells = reviewer not in that day's campaign (nothing to attest). A row is highlighted light red only when the reviewer left work undone (had pending items on an in-scope day) and made zero decisions all window.</p>")
 
     $hCellW = [math]::Min(70, [int](560 / [math]::Max(1, $dayCount)))
     $hCellH = 32; $hLabelW = 120
@@ -1342,28 +1469,41 @@ if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
 
         # For daily campaigns: show ABSOLUTE decisions per day (each day is a fresh campaign).
         # The reviewer's decided count on that day's campaign IS their daily work output.
+        # ABSENCE IS NOT INACTION: days the reviewer is not in the campaign render as a
+        # dotted empty cell ($null in $deltas), not a zero-activity cell.
         $deltas = @()
+        $hadUndoneWork = $false   # any in-scope day that ended with pending items
         for ($i = 0; $i -lt $dayCount; $i++) {
             $rvDay = $null
             foreach ($r in $dailyData[$i].Reviewers) {
                 if ($r.Name -eq $rv.Name) { $rvDay = $r; break }
             }
-            $dayDecided = if ($null -ne $rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
+            if ($null -eq $rvDay) { $deltas += $null; continue }
+            $dayDecided = [int]$rvDay.Approved + [int]$rvDay.Revoked
+            if ([int]$rvDay.Total -gt 0 -and [int]$rvDay.Pending -gt 0) { $hadUndoneWork = $true }
             $deltas += $dayDecided
             $totalActivity += $dayDecided
         }
 
-        if ($totalActivity -eq 0) {
+        # 'Inactive' row highlight only for real dereliction: zero decisions all window
+        # AND at least one in-scope day left pending. A reviewer whose in-scope days
+        # required nothing (or who was mostly out of scope) is not inactive.
+        if ($totalActivity -eq 0 -and $hadUndoneWork) {
             [void]$sb.AppendLine("<rect x='0' y='$hy' width='$hTotalW' height='$hCellH' fill='#fdecec' opacity='0.5'/>")
         }
 
         [void]$sb.AppendLine("<text x='$($hLabelW - 8)' y='$($hy + $hCellH / 2 + 4)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvNameSafe</text>")
 
         $maxDelta = 1
-        foreach ($dv in $deltas) { if ($dv -gt $maxDelta) { $maxDelta = $dv } }
+        foreach ($dv in $deltas) { if ($null -ne $dv -and $dv -gt $maxDelta) { $maxDelta = $dv } }
         for ($i = 0; $i -lt $deltas.Count; $i++) {
             $hcx = $hLabelW + ($i * $hCellW)
             $val = $deltas[$i]
+            if ($null -eq $val) {
+                # Not in this day's campaign: dotted outline, no fill, no number.
+                [void]$sb.AppendLine("<rect x='$($hcx + 2)' y='$($hy + 2)' width='$($hCellW - 4)' height='$($hCellH - 4)' rx='3' fill='none' stroke='#c9d3de' stroke-width='1' stroke-dasharray='3,2'/>")
+                continue
+            }
             $level = [math]::Min(4, [int][math]::Floor($val / $maxDelta * 4.99))
             if ($val -eq 0) { $level = 0 }
             $cellColor = $heatColors[$level]
@@ -1742,10 +1882,13 @@ $isMixedCampaigns = ($uniqueTotals.Count -gt 1 -or $uniqueReviewerCounts.Count -
 if ($dayCount -ge 1 -and $isMixedCampaigns) {
     $campaigns = @()
     foreach ($d in $dailyData) {
-        # Count stalled reviewers
+        # Count stalled reviewers: must actually HAVE items in this campaign.
+        # Zero-item reviewers (nothing to attest -- e.g. their items were revoked
+        # in an earlier campaign) carry Completion=0 and were previously counted
+        # stalled on every single day.
         $stalledCountCamp = 0
         foreach ($r in $d.Reviewers) {
-            if ([double]$r.Completion -lt 5) { $stalledCountCamp++ }
+            if ([int]$r.Total -gt 0 -and [double]$r.Completion -lt 5) { $stalledCountCamp++ }
         }
 
         # Compute deadline days
@@ -2037,146 +2180,159 @@ if ($dayCount -ge 3) {
 if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
     [void]$sb.AppendLine("<div class='section-title'>Reviewer Compliance Accountability</div>")
-    [void]$sb.AppendLine("<p class='note'>Categorizes reviewers by engagement pattern across the ${dayCount}-day window. 'Active' = made decisions on that day's campaign. Identifies chronic non-compliance, recent dropoff, and potential unreassigned absences.</p>")
+    [void]$sb.AppendLine("<p class='note'>Categorizes reviewers by ACCOUNTABLE days: days the reviewer was in that day's campaign WITH items to review. A day is 'missed' when it ended with pending items; 'completed' when nothing was left pending. Days the reviewer was not in the campaign -- or had no items -- never count against them (their scope completed, was revoked, or moved). Chronic = missed 3+ consecutive accountable days.</p>")
 
-    # Build per-reviewer activity timeline: which days they were active (decisions > 0)
+    # Build per-reviewer ACCOUNTABLE-day timeline. The old classifier used raw
+    # decisions-per-day with absence indistinguishable from inaction: a reviewer who
+    # FINISHED early (and thus vanished from later daily campaigns) aged into
+    # 'Inactive N days' -> red 'Absent (needs reassignment?)', and a reviewer whose
+    # in-scope days required no decisions was branded 'Never Complied'.
     $rvCompliance = @()
     foreach ($rv in $reviewerList) {
         $rn = $rv.Name
-        $activeDays = @()
         $totalDecisions = 0
+        $activeDayCount = 0
         $lastActiveIdx = -1
-        $firstActiveIdx = -1
+        $acctResults = @()        # chronological $true = missed / $false = completed, accountable days only
+        $acctDayCount = 0
+        $missedDayCount = 0
+        $lastAcctIdx = -1
+        $lastAcctMissed = $false
 
         for ($di = 0; $di -lt $dayCount; $di++) {
             $rvDay = $null
             foreach ($r in $dailyData[$di].Reviewers) {
                 if ($r.Name -eq $rn) { $rvDay = $r; break }
             }
-            $dayDec = if ($null -ne $rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
+            if ($null -eq $rvDay) { continue }   # not in this day's campaign: not accountable
+            $dayDec = [int]$rvDay.Approved + [int]$rvDay.Revoked
             $totalDecisions += $dayDec
-            if ($dayDec -gt 0) {
-                $activeDays += $di
-                $lastActiveIdx = $di
-                if ($firstActiveIdx -lt 0) { $firstActiveIdx = $di }
+            if ($dayDec -gt 0) { $activeDayCount++; $lastActiveIdx = $di }
+            if ([int]$rvDay.Total -gt 0) {
+                $acctDayCount++
+                $lastAcctIdx = $di
+                $missed = ([int]$rvDay.Pending -gt 0)
+                if ($missed) { $missedDayCount++ }
+                $acctResults += $missed
+                $lastAcctMissed = $missed
             }
         }
 
-        $daysSinceActive = if ($lastActiveIdx -ge 0) { $dayCount - 1 - $lastActiveIdx } else { $dayCount }
-        $activeDayCount = $activeDays.Count
+        # Consecutive missed streak counting back from the most recent accountable day.
+        $missStreak = 0
+        for ($ri = $acctResults.Count - 1; $ri -ge 0; $ri--) {
+            if ($acctResults[$ri]) { $missStreak++ } else { break }
+        }
 
-        # Classify
-        $compCategory = 'Unknown'
-        $compSeverity = 'green'
-        if ($totalDecisions -eq 0) {
-            $compCategory = 'Never Complied'
-            $compSeverity = 'red'
+        $acctToday = ($lastAcctIdx -eq ($dayCount - 1))
+        $lastAcctDate = if ($lastAcctIdx -ge 0) { $dailyData[$lastAcctIdx].DayLabel } else { 'Never' }
+
+        # Classify on accountable days only.
+        $compCategory = 'Unknown'; $compSeverity = 'green'
+        if ($acctDayCount -eq 0) {
+            $compCategory = 'No items in window'
+            $compSeverity = 'info'
         }
-        elseif ($daysSinceActive -eq 0) {
-            $compCategory = 'Active Today'
-            $compSeverity = 'green'
-        }
-        elseif ($daysSinceActive -le 2) {
-            $compCategory = "Inactive $daysSinceActive day(s)"
-            $compSeverity = 'green'
-        }
-        elseif ($daysSinceActive -le 4) {
-            $compCategory = "Inactive $daysSinceActive days"
-            $compSeverity = 'amber'
-        }
-        elseif ($daysSinceActive -le 7) {
-            $compCategory = "Inactive $daysSinceActive days"
-            $compSeverity = 'amber'
-        }
-        else {
-            # Active in first half but not second half = potential vacation/absence
-            $midpoint = [int]($dayCount / 2)
-            $activeFirstHalf = @($activeDays | Where-Object { $_ -lt $midpoint }).Count
-            $activeSecondHalf = @($activeDays | Where-Object { $_ -ge $midpoint }).Count
-            if ($activeFirstHalf -gt 0 -and $activeSecondHalf -eq 0) {
-                $compCategory = "Absent (active early, gone $daysSinceActive days)"
-                $compSeverity = 'red'
+        elseif (-not $acctToday) {
+            if (-not $lastAcctMissed) {
+                $compCategory = "Completed -- out of scope since $lastAcctDate"
+                $compSeverity = 'green'
             }
             else {
-                $compCategory = "Inactive $daysSinceActive days"
-                $compSeverity = 'red'
+                $compCategory = "Left scope with items pending (last in scope $lastAcctDate)"
+                $compSeverity = 'info'
             }
+        }
+        elseif (-not $lastAcctMissed) {
+            $compCategory = 'Compliant -- today complete'
+            $compSeverity = 'green'
+        }
+        elseif ($missedDayCount -eq $acctDayCount -and $totalDecisions -eq 0 -and $acctDayCount -ge 2) {
+            $compCategory = "Never Complied ($missedDayCount of $acctDayCount accountable days missed, zero decisions)"
+            $compSeverity = 'red'
+        }
+        elseif ($missStreak -ge 3) {
+            $compCategory = "Chronic: missed $missStreak consecutive accountable day(s)"
+            $compSeverity = 'red'
+        }
+        else {
+            $compCategory = "Missed $missStreak recent accountable day(s)"
+            $compSeverity = 'amber'
         }
 
         $rvCompliance += @{
-            Name           = $rn
-            Category       = $compCategory
-            Severity       = $compSeverity
-            TotalDecisions = $totalDecisions
-            ActiveDays     = $activeDayCount
-            DaysSinceActive = $daysSinceActive
-            LastActiveDate = if ($lastActiveIdx -ge 0) { $dailyData[$lastActiveIdx].DayLabel } else { 'Never' }
+            Name            = $rn
+            Category        = $compCategory
+            Severity        = $compSeverity
+            TotalDecisions  = $totalDecisions
+            ActiveDays      = $activeDayCount
+            AccountableDays = $acctDayCount
+            MissedDays      = $missedDayCount
+            DaysSinceActive = if ($lastActiveIdx -ge 0) { $dayCount - 1 - $lastActiveIdx } else { $dayCount }
+            LastActiveDate  = if ($lastActiveIdx -ge 0) { $dailyData[$lastActiveIdx].DayLabel } else { 'Never' }
+            LastAcctDate    = $lastAcctDate
         }
     }
 
     # Group by severity for summary counts
-    $redCount = @($rvCompliance | Where-Object { $_.Severity -eq 'red' }).Count
+    $redCount   = @($rvCompliance | Where-Object { $_.Severity -eq 'red' }).Count
     $amberCount = @($rvCompliance | Where-Object { $_.Severity -eq 'amber' }).Count
     $greenCount = @($rvCompliance | Where-Object { $_.Severity -eq 'green' }).Count
-    $neverCount = @($rvCompliance | Where-Object { $_.Category -eq 'Never Complied' }).Count
-    $absentCount = @($rvCompliance | Where-Object { $_.Category -match 'Absent' }).Count
+    $infoCount  = @($rvCompliance | Where-Object { $_.Severity -eq 'info' }).Count
+    $neverCount = @($rvCompliance | Where-Object { $_.Category -match '^Never Complied' }).Count
 
     # Summary KPIs
     [void]$sb.AppendLine("<div style='margin:8px 0 16px;'>")
-    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Green);'>$greenCount</span><span class='l'>Compliant</span></span>")
-    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Amber);'>$amberCount</span><span class='l'>At Risk (3-7 days)</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Green);'>$greenCount</span><span class='l'>Compliant / Completed</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Amber);'>$amberCount</span><span class='l'>At Risk (missed 1-2 days)</span></span>")
     $ncColor = if ($neverCount -gt 0) { $colors.Red } else { $colors.Green }
     [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$ncColor;'>$neverCount</span><span class='l'>Never Complied</span></span>")
-    $abColor = if ($absentCount -gt 0) { $colors.Red } else { $colors.Green }
-    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$abColor;'>$absentCount</span><span class='l'>Absent (needs reassignment?)</span></span>")
     [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Red);'>$redCount</span><span class='l'>Non-Compliant Total</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:#777;'>$infoCount</span><span class='l'>Out of Scope / No Items</span></span>")
     [void]$sb.AppendLine("</div>")
 
-    # Table: Non-compliant reviewers first (red, then amber), sorted by days since active descending
-    $sorted = @($rvCompliance | Sort-Object @{ Expression = { switch ($_.Severity) { 'red' { 0 } 'amber' { 1 } default { 2 } } } }, @{ Expression = { $_.DaysSinceActive }; Descending = $true })
+    # Order: red, amber, green, info; most missed days first within each group.
+    $sorted = @($rvCompliance | Sort-Object @{ Expression = { switch ($_.Severity) { 'red' { 0 } 'amber' { 1 } 'green' { 2 } default { 3 } } } }, @{ Expression = { $_.MissedDays }; Descending = $true })
+    $complianceCols = "<th>Reviewer</th><th style='text-align:right;'>Accountable Days</th><th style='text-align:right;'>Missed</th><th style='text-align:right;'>Decisions</th><th>Last In Scope</th><th>Status</th>"
+    function _V7ComplianceRow {
+        param($rv, [string]$RowStyle, [string]$StatusClass)
+        return "<tr$RowStyle><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.AccountableDays)</td><td style='text-align:right;'>$($rv.MissedDays)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td>$($rv.LastAcctDate)</td><td class='$StatusClass'>$($rv.Category)</td></tr>"
+    }
 
-    # Never Complied section
-    $neverList = @($sorted | Where-Object { $_.Category -eq 'Never Complied' })
-    if ($neverList.Count -gt 0) {
-        [void]$sb.AppendLine("<details open><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Red);'>Never Complied ($($neverList.Count) reviewers) -- Zero decisions across entire window</summary>")
-        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Status</th></tr></thead><tbody>")
-        foreach ($rv in $neverList) {
-            [void]$sb.AppendLine("<tr style='background:#fdecec;'><td style='font-weight:600;color:$($colors.Red);'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;font-weight:600;'>0</td><td style='text-align:right;'>0 / $dayCount</td><td>Never</td><td class='s-red'>$($rv.Category)</td></tr>")
-        }
+    # Non-compliant (red: Never Complied + Chronic) -- currently accountable and failing.
+    $redList = @($sorted | Where-Object { $_.Severity -eq 'red' })
+    if ($redList.Count -gt 0) {
+        [void]$sb.AppendLine("<details open><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Red);'>Non-Compliant ($($redList.Count) reviewers) -- In today's campaign with repeated missed days</summary>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr>$complianceCols</tr></thead><tbody>")
+        foreach ($rv in $redList) { [void]$sb.AppendLine((_V7ComplianceRow $rv " style='background:#fdecec;'" 's-red')) }
         [void]$sb.AppendLine("</tbody></table></details>")
     }
 
-    # Absent (active early, gone recently) section
-    $absentList = @($sorted | Where-Object { $_.Category -match 'Absent' })
-    if ($absentList.Count -gt 0) {
-        [void]$sb.AppendLine("<details open><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Red);'>Potentially Absent / Unreassigned ($($absentList.Count) reviewers) -- Active early in window, inactive recently</summary>")
-        [void]$sb.AppendLine("<p class='note'>These reviewers were active in the first half of the window but have made zero decisions recently. They may be on vacation, leave, or have left the organization without their certifications being reassigned.</p>")
-        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Days Since</th><th>Status</th></tr></thead><tbody>")
-        foreach ($rv in $absentList) {
-            [void]$sb.AppendLine("<tr style='background:#fff7e6;'><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td style='text-align:right;'>$($rv.ActiveDays) / $dayCount</td><td>$($rv.LastActiveDate)</td><td style='text-align:right;font-weight:600;'>$($rv.DaysSinceActive)</td><td class='s-red'>$($rv.Category)</td></tr>")
-        }
-        [void]$sb.AppendLine("</tbody></table></details>")
-    }
-
-    # At-risk (3-7 days inactive) section
+    # At-risk (amber) -- accountable today, missed 1-2 recent accountable days.
     $atRiskList = @($sorted | Where-Object { $_.Severity -eq 'amber' })
     if ($atRiskList.Count -gt 0) {
-        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Amber);'>At Risk ($($atRiskList.Count) reviewers) -- Inactive 3-7 days</summary>")
-        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Days Since</th><th>Status</th></tr></thead><tbody>")
-        foreach ($rv in $atRiskList) {
-            [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td style='text-align:right;'>$($rv.ActiveDays) / $dayCount</td><td>$($rv.LastActiveDate)</td><td style='text-align:right;'>$($rv.DaysSinceActive)</td><td class='s-amber'>$($rv.Category)</td></tr>")
-        }
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Amber);'>At Risk ($($atRiskList.Count) reviewers) -- Missed recent accountable day(s)</summary>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr>$complianceCols</tr></thead><tbody>")
+        foreach ($rv in $atRiskList) { [void]$sb.AppendLine((_V7ComplianceRow $rv '' 's-amber')) }
         [void]$sb.AppendLine("</tbody></table></details>")
     }
 
-    # Compliant section (collapsed)
+    # Compliant / completed (green, collapsed).
     $compliantList = @($sorted | Where-Object { $_.Severity -eq 'green' })
     if ($compliantList.Count -gt 0) {
-        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Green);'>Compliant ($($compliantList.Count) reviewers) -- Active within last 2 days</summary>")
-        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Status</th></tr></thead><tbody>")
-        foreach ($rv in $compliantList) {
-            [void]$sb.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td style='text-align:right;'>$($rv.ActiveDays) / $dayCount</td><td>$($rv.LastActiveDate)</td><td class='s-green'>$($rv.Category)</td></tr>")
-        }
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Green);'>Compliant ($($compliantList.Count) reviewers) -- Today complete, or completed and left scope</summary>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr>$complianceCols</tr></thead><tbody>")
+        foreach ($rv in $compliantList) { [void]$sb.AppendLine((_V7ComplianceRow $rv '' 's-green')) }
+        [void]$sb.AppendLine("</tbody></table></details>")
+    }
+
+    # Informational (out of scope with items pending at exit / never had items).
+    $infoList = @($sorted | Where-Object { $_.Severity -eq 'info' })
+    if ($infoList.Count -gt 0) {
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:#777;'>Out of Scope / No Items ($($infoList.Count) reviewers) -- Informational, not counted against compliance</summary>")
+        [void]$sb.AppendLine("<p class='note'>Reviewers no longer in the newest campaign (their items completed elsewhere, were revoked, or moved to another reviewer) or who never had items in this window. Nothing for them to attest -- excluded from the non-compliance counts.</p>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr>$complianceCols</tr></thead><tbody>")
+        foreach ($rv in $infoList) { [void]$sb.AppendLine((_V7ComplianceRow $rv '' 's-amber')) }
         [void]$sb.AppendLine("</tbody></table></details>")
     }
 
@@ -2191,7 +2347,7 @@ if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
     [void]$sb.AppendLine("<div class='section-title'>Reviewer Engagement Heatmap</div>")
     [void]$sb.AppendLine("<p class='note'>Daily engagement pattern per reviewer across the ${dayCount}-day window. Each cell shows the reviewer's status for that day's campaign.</p>")
-    [void]$sb.AppendLine("<p class='note'><strong>C</strong> = Completed (all items decided) &nbsp; <strong>P</strong> = Partial (some decided) &nbsp; <strong>M</strong> = Missed (0 decisions, items pending) &nbsp; <strong>U</strong> = Undecided (campaign closed, items auto-approved) &nbsp; <span style='color:#999;'>-</span> = Not assigned</p>")
+    [void]$sb.AppendLine("<p class='note'><strong>C</strong> = Completed (all items decided) &nbsp; <strong>P</strong> = Partial (some decided) &nbsp; <strong>M</strong> = Missed (0 decisions, items pending) &nbsp; <strong>U</strong> = Auto-closed (campaign force-closed / legacy suspect data -- genuine engagement unknown, never counted as Completed) &nbsp; <span style='color:#999;'>-</span> = Not assigned (nothing to attest that day)</p>")
 
     # Build C/P/M/U grid: rows = reviewers, columns = dates
     $engGrid = @{}
@@ -2212,8 +2368,16 @@ if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
             $decided = [int]$rvDay.Approved + [int]$rvDay.Revoked
             $pending = [int]$rvDay.Pending
             $campStatus = $dailyData[$di].CampaignStatus
+            $dayIsSuspect = $false
+            try { $dayIsSuspect = [bool]$dailyData[$di].IsSuspect } catch { }
 
-            if ($decided -gt 0 -and $pending -eq 0) {
+            if ($dayIsSuspect -and $pending -eq 0 -and $campStatus -eq 'COMPLETED') {
+                # Legacy pre-canonical (suspect) day: the force-close counted
+                # auto-approvals as decided, so decided>0/pending=0 must NOT read as
+                # Completed -- the honest state is U (auto-closed, engagement unknown).
+                $engGrid[$rn][$di] = 'U'; $uCount++
+            }
+            elseif ($decided -gt 0 -and $pending -eq 0) {
                 $engGrid[$rn][$di] = 'C'; $cCount++
             }
             elseif ($decided -gt 0 -and $pending -gt 0) {
@@ -2331,7 +2495,8 @@ if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
 if ($null -ne $seriesDeltaData -and $seriesDeltaData.Total -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
     [void]$sb.AppendLine("<div class='section-title'>Entitlement State Summary</div>")
-    [void]$sb.AppendLine("<p class='note'>Honest decision distribution across $($seriesDeltaData.SeriesCount) recurring campaign series. Auto-approved items (idNowAutoApproved) are classified as <strong>Undecided</strong>, not Approved. Powered by SP.CampaignSeries cross-instance analysis.</p>")
+    $chart15Scope = if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) { "series matching '-CampaignNameContains $CampaignNameContains'" } else { 'ALL cached campaign series (tenant-wide; the -StartDate/-EndDate window and other filters do not apply here)' }
+    [void]$sb.AppendLine("<p class='note'>Honest decision distribution across $($seriesDeltaData.SeriesCount) recurring campaign series -- covers $(ConvertTo-SPHtmlSafe $chart15Scope). Auto-approved items (idNowAutoApproved) are classified as <strong>Undecided</strong>, not Approved. Powered by SP.CampaignSeries cross-instance analysis.</p>")
 
     $sdAppr = $seriesDeltaData.Approved
     $sdRev  = $seriesDeltaData.Revoked

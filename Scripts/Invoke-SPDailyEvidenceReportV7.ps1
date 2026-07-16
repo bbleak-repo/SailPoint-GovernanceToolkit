@@ -354,6 +354,7 @@ if ([string]::IsNullOrWhiteSpace($filterEndDate)) {
 Write-Host "    Date range: $filterStartDate to $filterEndDate" -ForegroundColor DarkGray
 
 $allRecords = [System.Collections.Generic.List[object]]::new()
+$corruptLines = 0
 
 $rawLines = [System.IO.File]::ReadAllLines($jsonlPath, $utf8)
 foreach ($ln in $rawLines) {
@@ -384,10 +385,13 @@ foreach ($ln in $rawLines) {
         }
 
         $allRecords.Add($rec)
-    } catch { }
+    } catch { $corruptLines++ }
 }
 
 Write-Host "    Loaded $($allRecords.Count) record(s) within ${effectiveDaysBack}-day window" -ForegroundColor DarkGray
+if ($corruptLines -gt 0) {
+    Write-Host "    WARN: $corruptLines unparseable JSONL line(s) skipped -- records may be missing from this report." -ForegroundColor Yellow
+}
 
 if ($allRecords.Count -eq 0) {
     Write-Host '' -ForegroundColor Red
@@ -907,6 +911,9 @@ tr:nth-child(even) td{background:#f6f9fc;}
 .delta-up{color:#0a7d2c;font-weight:600;}
 .delta-down{color:#b00020;font-weight:600;}
 .delta-flat{color:#9a6700;}
+.s-red{color:#b00020;font-weight:600;}
+.s-amber{color:#9a6700;font-weight:600;}
+.s-green{color:#0a7d2c;font-weight:600;}
 .footer{margin-top:24px;padding-top:8px;border-top:1px solid #d4dce6;font-size:11px;color:#777;}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;color:#fff;margin-left:6px;vertical-align:middle;}
 .badge-red{background:#b00020;}
@@ -1030,7 +1037,7 @@ elseif ($dayCount -ge 2 -and $isOverdue) {
 if ($insufficientData) {
     [void]$sb.AppendLine("<div class='section' style='background:#fff7e6;border-color:#ffd97a;'>")
     [void]$sb.AppendLine("<div class='section-title' style='color:#7a5a00;'>Insufficient Trend Data</div>")
-    [void]$sb.AppendLine("<p style='color:#7a5a00;font-size:13px;'>Only $dayCount calendar day(s) available. Multi-day progression charts require at least 2 captures on different days. Below shows today's snapshot data only. Run V4 daily to accumulate the series.</p>")
+    [void]$sb.AppendLine("<p style='color:#7a5a00;font-size:13px;'>Only $dayCount calendar day(s) available. Multi-day progression charts require at least 2 captures on different days. Below shows today's snapshot data only. Run V4b daily to accumulate the series.</p>")
     [void]$sb.AppendLine("</div>")
 }
 
