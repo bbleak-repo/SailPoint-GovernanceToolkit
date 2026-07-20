@@ -479,6 +479,9 @@ $highRiskPendingCount    = 0
 $kpi5Status              = 'Green'
 $reviewerAtRiskCount     = 0
 $reviewerTotalCount      = 0
+$notFinishedCount        = 0
+$goodStandingCount       = 0
+$reviewerHealthPct       = 100
 $kpi6Status              = 'Green'
 $confidenceScore         = 0
 $confidenceGrade         = 'N/A'
@@ -1447,15 +1450,62 @@ try {
         }
     }
 
-    $goodStandingCount = $reviewerTotalCount - $reviewerAtRiskCount
+    # HONEST FINISH GATE (honest-numbers doctrine / "absence is not inaction"): a reviewer
+    # who left >= 1 canonically-undecided item in a CLOSED (COMPLETED/COMPLETING) campaign
+    # did NOT genuinely finish -- and an unfinished review is not a finish, no matter how
+    # high the blended reputation score. "Good standing" must therefore gate on genuine
+    # completion, not on Measure-SPReviewerReputation (where completion is only 25% of the
+    # weight, so a non-finisher can still clear the At-Risk bar). ACTIVE campaigns are
+    # excluded -- mid-flight pending is normal (pace-first). This reuses the per-reviewer
+    # honest records stamped during the metrics build ($audit['ReviewerRecords']: pending =
+    # canonically-undecided with auto-approves demoted; 'signed' already excludes the ISC
+    # force-close), so the KPI headline agrees with the per-campaign accountability detail.
+    $scoredNameSet = @{}
+    if ($null -ne $reviewerReputationData -and $null -ne $reviewerReputationData.Reviewers) {
+        foreach ($rv in @($reviewerReputationData.Reviewers)) {
+            $rn = [string]$rv.ReviewerName
+            if (-not [string]::IsNullOrWhiteSpace($rn)) { $scoredNameSet[$rn.Trim().ToLowerInvariant()] = $true }
+        }
+    }
+    $notFinishedReviewers = [ordered]@{}   # lower(name) -> @{ Name; Undecided; Campaigns }
+    foreach ($fgAudit in $campaignAudits) {
+        $fgStatus = ([string]$fgAudit['Status']).ToUpperInvariant()
+        if ($fgStatus -notin @('COMPLETED', 'COMPLETING')) { continue }
+        $fgRecs = if ($fgAudit.ContainsKey('ReviewerRecords')) { @($fgAudit['ReviewerRecords']) } else { @() }
+        foreach ($rr in $fgRecs) {
+            if ([int]$rr.pending -le 0) { continue }
+            $rrName = [string]$rr.name
+            if ([string]::IsNullOrWhiteSpace($rrName)) { continue }
+            $rrKey = $rrName.Trim().ToLowerInvariant()
+            if (-not $notFinishedReviewers.Contains($rrKey)) {
+                $notFinishedReviewers[$rrKey] = @{ Name = $rrName; Undecided = 0; Campaigns = [System.Collections.Generic.List[string]]::new() }
+            }
+            $notFinishedReviewers[$rrKey].Undecided += [int]$rr.pending
+            [void]$notFinishedReviewers[$rrKey].Campaigns.Add([string]$fgAudit['CampaignName'])
+        }
+    }
+    # Restrict to the reputation-scored population so the N-of-M numerator and denominator
+    # agree (MinCampaigns=1 => every reviewer with >=1 campaign is scored, so no non-finisher
+    # is lost). If reputation produced no roster, fall back to counting all non-finishers.
+    $notFinishedKeys = @($notFinishedReviewers.Keys | Where-Object { $scoredNameSet.Count -eq 0 -or $scoredNameSet.ContainsKey($_) })
+    $notFinishedCount = @($notFinishedKeys).Count
+
+    # GENUINE good standing = genuinely finished. A reputation-based "at risk" reviewer is a
+    # secondary behavioural signal, surfaced separately -- it no longer defines the headline.
+    $goodStandingCount = [Math]::Max(0, $reviewerTotalCount - $notFinishedCount)
     $reviewerHealthPct = if ($reviewerTotalCount -gt 0) { [math]::Round(($goodStandingCount / $reviewerTotalCount) * 100, 0) } else { 100 }
 
-    $kpi6Status = Get-KpiStatusInverse -Value $reviewerAtRiskCount `
+    $kpi6Status = Get-KpiStatusInverse -Value $notFinishedCount `
         -GreenMax $thresholds.ReviewerHealth.GreenMaxAtRisk `
         -YellowMax $thresholds.ReviewerHealth.YellowMaxAtRisk
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $detail = "$goodStandingCount of $reviewerTotalCount in good standing ($reviewerHealthPct%)"
+    $detail = "$goodStandingCount of $reviewerTotalCount genuinely finished ($reviewerHealthPct%)"
+    if ($notFinishedCount -gt 0) {
+        $nfNames = @($notFinishedKeys | ForEach-Object { $notFinishedReviewers[$_].Name } | Select-Object -First 6) -join ', '
+        $detail += "; $notFinishedCount not in good standing -- held undecided items in a closed campaign: $nfNames"
+    }
+    if ($reviewerAtRiskCount -gt 0) { $detail += " [reputation at-risk: $reviewerAtRiskCount]" }
     if ($rubberStampTotal -gt 0) { $detail += ", $rubberStampTotal rubber-stamp flag(s)" }
     $stepResults['ReviewerHealth'] = @{ Status = 'Success'; Detail = $detail; Duration = [math]::Round($stepDuration, 2) }
     Write-Host "  Step 7: $detail [$kpi6Status]" -ForegroundColor $(if ($kpi6Status -eq 'Green') { 'Green' } elseif ($kpi6Status -eq 'Yellow') { 'Yellow' } else { 'Red' })
@@ -1576,7 +1626,7 @@ $kpiSummary = @(
     }
     @{
         Name = 'Reviewer Health'; Value = $reviewerDisplay; Status = $kpi6Status
-        Detail = "$goodStandingCount of $reviewerTotalCount in good standing"
+        Detail = "$goodStandingCount of $reviewerTotalCount genuinely finished"
         TrendMetric = 'reviewers.avgScore'
     }
 )
@@ -2290,7 +2340,7 @@ if ($OutputMode -eq 'JSON') {
             RevocationsExecuted  = [ordered]@{ Value = $revocationExecutionRate; Status = $kpi3Status; Detail = "$revocationProvisioned of $revocationTotal provisioned" }
             RemediationTimeliness = [ordered]@{ Value = $slaComplianceRate; Status = $kpi4Status; Detail = "$($agingDetails.Count) pending" }
             HighRiskExposure     = [ordered]@{ Value = $highRiskPendingCount; Status = $kpi5Status; Detail = "$($highRiskPending.Count) items" }
-            ReviewerHealth       = [ordered]@{ Value = $reviewerHealthPct; Status = $kpi6Status; Detail = "$reviewerAtRiskCount at-risk of $reviewerTotalCount" }
+            ReviewerHealth       = [ordered]@{ Value = $reviewerHealthPct; Status = $kpi6Status; Detail = "$notFinishedCount did not finish of $reviewerTotalCount (reputation at-risk: $reviewerAtRiskCount)" }
         }
         DominoChainStatus = $dominoWorstStatus
         AgingBuckets      = $agingBuckets
