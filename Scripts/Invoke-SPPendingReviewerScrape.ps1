@@ -59,7 +59,7 @@ param(
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'HTML', 'Both')][string]$OutputMode = 'Both',
     [Parameter()][int]$Top = 0,
-    [Parameter()][int]$MinMisses = 1,
+    [Parameter()][int]$MinMisses = -1,
     [Parameter()][Alias('?')][switch]$Help
 )
 
@@ -286,12 +286,124 @@ foreach ($rep in $reports) {
 foreach ($name in @($counts.Keys)) { $counts[$name] = $grid[$name].Count }
 $rows = @($counts.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $_.Key; Count = $_.Value; Pct = if ($total -gt 0) { [math]::Round($_.Value * 100.0 / $total, 0) } else { 0 } } } |
           Sort-Object -Property @{Expression='Count';Descending=$true}, @{Expression='Name';Descending=$false})
-# -MinMisses: drop reviewers with fewer than N total pending appearances (e.g. -MinMisses 2 leaves off
-# anyone who only missed a single day). Cascades to every reviewer view -- bars, streak flags, heatmap,
-# and the detail table all derive from $rows below.
+# Auto-MinMisses: if not explicitly set (-1), scale based on campaign count.
+# <= 5 campaigns: show everyone (MinMisses=1). > 5: default to 3 to filter noise.
+if ($MinMisses -lt 0) {
+    $MinMisses = if ($total -le 2) { 1 } elseif ($total -le 5) { 2 } else { 3 }
+    Write-Host "  Auto-MinMisses: $MinMisses (based on $total campaign day(s))" -ForegroundColor DarkGray
+}
+
+# -MinMisses: drop reviewers with fewer than N total pending appearances.
 $reviewersBeforeMinMisses = $rows.Count
 if ($MinMisses -gt 1) { $rows = @($rows | Where-Object { $_.Count -ge $MinMisses }) }
 $excludedByMinMisses = $reviewersBeforeMinMisses - $rows.Count
+
+# ---------------------------------------------------------------------------
+# Gaming / Pattern Detection (runs when > 5 campaigns)
+# ---------------------------------------------------------------------------
+# Detects reviewers who are strategically doing just enough to avoid flagging:
+#   - Alternating: miss-complete-miss-complete (never accumulates streaks)
+#   - Weekend-adjacent: always skips the same day of week (shift pattern)
+#   - Declining: strong start, tapering off (engagement fatigue)
+#   - Burst: long idle streak then one completion right before escalation
+#   - Bare minimum: miss rate 30-59% (doing just enough to stay under radar)
+# ---------------------------------------------------------------------------
+function Get-ReviewerPattern {
+    param([string]$Name, $DistinctDates, $ByDate, [int]$TotalDays, [int]$MissCount)
+    $patterns = @()
+    $missRate = if ($TotalDays -gt 0) { $MissCount / $TotalDays } else { 0 }
+
+    if ($TotalDays -lt 6) { return @{ Patterns = @(); Score = 0; Label = 'Insufficient data' } }
+
+    # Build per-day presence array: $true = pending (missed), $false = completed
+    $dayStates = @()
+    foreach ($dt in $DistinctDates) {
+        $isPending = $ByDate[$dt.ToString('yyyy-MM-dd')].Contains($Name)
+        $dayStates += @{ Date = $dt; DayOfWeek = $dt.DayOfWeek; Pending = $isPending }
+    }
+
+    # 1. Alternating pattern: miss-complete-miss-complete (strategic avoidance of streaks)
+    $transitions = 0
+    for ($i = 1; $i -lt $dayStates.Count; $i++) {
+        if ($dayStates[$i].Pending -ne $dayStates[$i-1].Pending) { $transitions++ }
+    }
+    $transitionRate = $transitions / [math]::Max(1, $dayStates.Count - 1)
+    if ($transitionRate -ge 0.7 -and $missRate -ge 0.3) {
+        $patterns += 'Alternating (miss-complete-miss pattern)'
+    }
+
+    # 2. Day-of-week skipping: always misses the same day (shift worker or gaming)
+    $dowMisses = @{}
+    $dowTotal = @{}
+    foreach ($ds in $dayStates) {
+        $dow = [string]$ds.DayOfWeek
+        if (-not $dowTotal.ContainsKey($dow)) { $dowTotal[$dow] = 0; $dowMisses[$dow] = 0 }
+        $dowTotal[$dow]++
+        if ($ds.Pending) { $dowMisses[$dow]++ }
+    }
+    $avgMissRate = $missRate
+    foreach ($dow in $dowMisses.Keys) {
+        if ($dowTotal[$dow] -lt 2) { continue }
+        $dowRate = $dowMisses[$dow] / $dowTotal[$dow]
+        if ($dowRate -ge 0.75 -and $dowRate -gt ($avgMissRate * 2)) {
+            $patterns += "Day-of-week: misses $dow ($($dowMisses[$dow])/$($dowTotal[$dow]) = $([math]::Round($dowRate * 100))%)"
+        }
+    }
+
+    # 3. Declining engagement: first half vs second half
+    $mid = [int]($dayStates.Count / 2)
+    $firstHalfMisses = @($dayStates[0..($mid-1)] | Where-Object { $_.Pending }).Count
+    $secondHalfMisses = @($dayStates[$mid..($dayStates.Count-1)] | Where-Object { $_.Pending }).Count
+    $firstHalfRate = $firstHalfMisses / [math]::Max(1, $mid)
+    $secondHalfRate = $secondHalfMisses / [math]::Max(1, $dayStates.Count - $mid)
+    if ($secondHalfRate -ge ($firstHalfRate * 2.5) -and $secondHalfMisses -ge 3 -and $firstHalfRate -lt 0.3) {
+        $patterns += "Declining (first half: $([math]::Round($firstHalfRate*100))% miss, second half: $([math]::Round($secondHalfRate*100))% miss)"
+    }
+
+    # 4. Burst compliance: long miss streak then single completion then miss again
+    $burstCount = 0
+    for ($i = 2; $i -lt ($dayStates.Count - 1); $i++) {
+        if (-not $dayStates[$i].Pending -and $dayStates[$i-1].Pending -and $dayStates[$i-2].Pending -and $dayStates[$i+1].Pending) {
+            $burstCount++
+        }
+    }
+    if ($burstCount -ge 2) {
+        $patterns += "Burst compliance ($burstCount isolated completions surrounded by misses)"
+    }
+
+    # 5. Bare minimum: miss rate 30-59% -- doing just enough
+    if ($missRate -ge 0.3 -and $missRate -lt 0.6 -and $patterns.Count -eq 0) {
+        $patterns += "Bare minimum ($([math]::Round($missRate*100))% miss rate -- borderline compliance)"
+    }
+
+    # 6. Chronic: miss rate >= 60%
+    if ($missRate -ge 0.6) {
+        $patterns += "Chronic non-compliance ($([math]::Round($missRate*100))% miss rate)"
+    }
+
+    # Gaming score: 0-100
+    $score = 0
+    if ($missRate -ge 0.6) { $score += 40 }
+    elseif ($missRate -ge 0.3) { $score += [int]($missRate * 50) }
+    if ($transitionRate -ge 0.7 -and $missRate -ge 0.3) { $score += 25 }  # alternating
+    if ($burstCount -ge 2) { $score += 20 }
+    if ($secondHalfRate -ge ($firstHalfRate * 2.5) -and $secondHalfMisses -ge 3) { $score += 15 }
+    foreach ($dow in $dowMisses.Keys) {
+        if ($dowTotal[$dow] -ge 2 -and ($dowMisses[$dow] / $dowTotal[$dow]) -ge 0.75) { $score += 10; break }
+    }
+    $score = [math]::Min(100, $score)
+
+    $label = if ($score -ge 60) { 'High Risk' } elseif ($score -ge 30) { 'Concerning' } elseif ($score -gt 0) { 'Monitor' } else { 'Normal' }
+    return @{ Patterns = $patterns; Score = $score; Label = $label }
+}
+
+# Run pattern detection when > 5 campaigns
+$patternResults = @{}
+if ($total -gt 5) {
+    foreach ($r in $rows) {
+        $patternResults[$r.Name] = Get-ReviewerPattern -Name $r.Name -DistinctDates $distinctDates -ByDate $byDate -TotalDays $distinctCount -MissCount $r.Count
+    }
+}
 $shown = if ($Top -gt 0) { @($rows | Select-Object -First $Top) } else { $rows }
 # Per-DAY pending counts (union across same-day report files), aligned with $dateLabels.
 $dayReviewerSets = @{}
@@ -338,6 +450,23 @@ if ($OutputMode -in @('Console', 'Both')) {
     }
     else {
         Write-Host "Missed-review streaks: none reached the $streakThreshold-consecutive-day threshold." -ForegroundColor Green
+    }
+
+    # Gaming / Pattern detection output
+    if ($patternResults.Count -gt 0) {
+        $flagged = @($patternResults.GetEnumerator() | Where-Object { $_.Value.Score -ge 30 } | Sort-Object { $_.Value.Score } -Descending)
+        if ($flagged.Count -gt 0) {
+            Write-Host ''
+            Write-Host "Pattern Detection: $($flagged.Count) reviewer(s) with concerning engagement patterns" -ForegroundColor Yellow
+            foreach ($f in $flagged) {
+                $color = if ($f.Value.Score -ge 60) { 'Red' } else { 'Yellow' }
+                Write-Host "  $($f.Key) [Score: $($f.Value.Score) - $($f.Value.Label)]" -ForegroundColor $color
+                foreach ($p in $f.Value.Patterns) { Write-Host "    - $p" -ForegroundColor DarkGray }
+            }
+        }
+        else {
+            Write-Host "Pattern Detection: no concerning engagement patterns found." -ForegroundColor Green
+        }
     }
 }
 
@@ -394,6 +523,30 @@ $streakTableRows
 
 <h2>4. Daily Distinct-Pending Trend</h2>
 <div style='overflow-x:auto'>$trendSvg</div>
+
+$(if ($patternResults.Count -gt 0) {
+    $patternFlagged = @($patternResults.GetEnumerator() | Where-Object { $_.Value.Score -gt 0 } | Sort-Object { $_.Value.Score } -Descending)
+    if ($patternFlagged.Count -gt 0) {
+        $ptRows = ($patternFlagged | ForEach-Object {
+            $sc = $_.Value.Score
+            $scColor = if ($sc -ge 60) { '#c0392b' } elseif ($sc -ge 30) { '#e67e22' } else { '#777' }
+            $bg = if ($sc -ge 60) { " style='background:#fdecea'" } elseif ($sc -ge 30) { " style='background:#fef9e7'" } else { '' }
+            $patList = if ($_.Value.Patterns.Count -gt 0) { ($_.Value.Patterns | ForEach-Object { "&#8226; $_" }) -join '<br>' } else { '-' }
+            "<tr$bg><td>$(ConvertTo-Safe $_.Key)</td><td style='text-align:center;color:$scColor;font-weight:600'>$sc</td><td style='color:$scColor;font-weight:600'>$($_.Value.Label)</td><td style='font-size:11px'>$patList</td></tr>"
+        }) -join "`n"
+@"
+<h2>5. Engagement Pattern Analysis</h2>
+<div class='note'>Detects reviewers who may be gaming the system or showing concerning engagement patterns.
+Score: 0-29 = Monitor, 30-59 = Concerning, 60+ = High Risk. Patterns: Alternating (miss-complete-miss avoids streaks),
+Day-of-week (always skips same day), Declining (strong start, tapering off), Burst (long idle then one completion
+before escalation), Bare minimum (30-59% miss rate). Only runs when &gt; 5 campaign days.</div>
+<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:center'>Score</th><th>Risk Level</th><th>Patterns Detected</th></tr></thead>
+<tbody>
+$ptRows
+</tbody></table>
+"@
+    } else { "<h2>5. Engagement Pattern Analysis</h2><p style='color:#27ae60'>No concerning patterns detected.</p>" }
+} else { '' })
 
 <h2>Detail</h2>
 <table class='report'><thead><tr><th>Reviewer</th><th>Pending In</th><th>Of</th><th>%</th><th>Dates</th></tr></thead>
