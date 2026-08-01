@@ -289,7 +289,7 @@ $rows = @($counts.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $
 # Auto-MinMisses: if not explicitly set (-1), scale based on campaign count.
 # <= 5 campaigns: show everyone (MinMisses=1). > 5: default to 3 to filter noise.
 if ($MinMisses -lt 0) {
-    $MinMisses = if ($total -le 2) { 1 } elseif ($total -le 5) { 2 } else { 3 }
+    $MinMisses = if ($total -le 3) { 1 } else { 3 }
     Write-Host "  Auto-MinMisses: $MinMisses (based on $total campaign day(s))" -ForegroundColor DarkGray
 }
 
