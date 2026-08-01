@@ -803,6 +803,77 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Toolkit\Scripts\Invoke-SPWeekly
 
 ---
 
+## Daily Evidence Script Quick Reference
+
+### Execution order and dependencies
+
+```
+   ISC API
+      |
+      v
+  V4b (fetch + cache + daily-metrics.jsonl)
+      |
+      +---> V4e (read-only, series engine, stable scope key)
+      |          requires: items cache from V4b
+      |
+      +---> V7 (calendar-day visualization from daily-metrics.jsonl)
+      |          requires: daily-metrics.jsonl from V4b
+      |
+      +---> Update-SPStateFiles (populate entitlement-state + reviewer-state)
+      |          requires: items cache from V4b
+      |
+      +---> V8 (state-powered report, auto-refreshes state files if stale)
+                 requires: state files (auto-creates from cache if missing)
+
+  HTML report files (from any of the above)
+      |
+      +---> Governance Trend Scraper (monthly dashboard from HTML files)
+      +---> Pending Reviewer Scraper (chronic non-compliance from HTML files)
+```
+
+### Script summary
+
+| Script | Purpose | Calls ISC? | Writes Cache? | Prerequisites | Key Output |
+|---|---|---|---|---|---|
+| `Invoke-SPDailyEvidenceReportV4b.ps1` | Daily evidence with KPI dashboard, reviewer accountability, revoked register, new scope | YES | YES | ISC token/config | HTML + daily-metrics.jsonl |
+| `Invoke-SPDailyEvidenceReportV4e.ps1` | Series-aware attestation delta with stable scope key. Honest newly-attested + decision transitions | NO | NO | Items cache (from V4b) | HTML |
+| `Invoke-SPDailyEvidenceReportV7.ps1` | Calendar-day trending visualization with charts | NO | NO | daily-metrics.jsonl (from V4b) | HTML |
+| `Invoke-SPDailyEvidenceReportV8.ps1` | State-powered report: entitlement + reviewer state, privileged breakdown, chronic unreviewed, weekly compliance | NO (auto-refresh from cache) | State files | State files or items cache | HTML |
+| `Update-SPStateFiles.ps1` | Populate/refresh entitlement-state.jsonl + reviewer-state.jsonl from cache | NO | State files | Items cache (from V4b) | JSONL state files |
+| `Invoke-SPGovernanceTrendScrape.ps1` | Monthly governance dashboard from existing HTML reports | NO | NO | HTML report files | HTML dashboard |
+| `Invoke-SPPendingReviewerScrape.ps1` | Chronic pending reviewer tracker with gaming detection | NO | NO | HTML report files | HTML dashboard |
+| `Invoke-SPDeltaCertEscalate.ps1` | Reviewer escalation with org hierarchy | YES | NO | ISC token/config | HTML + CSV + TXT |
+
+### Common workflows
+
+**Daily morning run:**
+```powershell
+.\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -DaysBack 18 -OutputMode Both
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -OutputMode Both
+```
+V4b fetches from ISC and populates cache + JSONL. V8 auto-refreshes state files
+from the cache and generates the state-powered report. No need to run V4e/V7
+separately unless you want those specific views.
+
+**Weekly leadership report:**
+```powershell
+.\Scripts\Invoke-SPGovernanceTrendScrape.ps1 -Since '2026-07-21' -Until '2026-07-25'
+.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -Since '2026-07-21'
+```
+
+**Monthly compliance report:**
+```powershell
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -StartDate '2026-06-01' -EndDate '2026-06-30' -CampaignNameContains 'Daily'
+.\Scripts\Invoke-SPGovernanceTrendScrape.ps1 -Since '2026-06-01' -Until '2026-06-30'
+```
+
+**Fresh data (stale cache or after force-close):**
+```powershell
+.\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -DaysBack 18 -RefreshCache -OutputMode Both
+```
+
+---
+
 ## Choosing the Right Report
 
 Use this decision tree to find the right report for your situation.
@@ -827,10 +898,21 @@ Use this decision tree to find the right report for your situation.
 
 ### "Are my reviewers doing their job?"
 
-1. `Invoke-SPCampaignAudit.ps1 -Status ACTIVE -DetailLevel Detailed` -- reviewer accountability section
-2. `Invoke-SPWeeklyDigest.ps1 -OutputMode HTML` -- reviewer performance section
-3. `Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId <id>` -- per-reviewer workload analysis
-4. `Invoke-SPCampaignSearch.ps1 -ShowMetrics -ShowDeadlines` -- campaign-level KPIs with deadline urgency
+1. `Invoke-SPDailyEvidenceReportV8.ps1` -- Section 5-7: engagement score, weekly compliance, heatmap (state-powered, most current)
+2. `Invoke-SPPendingReviewerScrape.ps1 -Since '2026-06-01'` -- chronic non-compliance tracker with gaming pattern detection
+3. `Invoke-SPCampaignAudit.ps1 -Status ACTIVE -DetailLevel Detailed` -- reviewer accountability section
+4. `Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId <id>` -- per-reviewer workload analysis
+
+### "What's the privileged access exposure?"
+
+1. `Invoke-SPDailyEvidenceReportV8.ps1` -- Section 1b: privileged breakdown by source (AD/AWS/ServiceNow/SAP) with decided %
+2. `Invoke-SPDailyEvidenceReportV4e.ps1 -SeriesName 'Daily'` -- series-aware privileged items with honest newly-attested
+
+### "Give me a monthly trend for leadership"
+
+1. `Invoke-SPGovernanceTrendScrape.ps1 -Since '2026-06-01' -Until '2026-06-30'` -- monthly dashboard with KPIs, charts, MoM comparison
+2. `Invoke-SPDailyEvidenceReportV7.ps1 -StartDate '2026-06-01' -EndDate '2026-06-30'` -- calendar-day visualization
+3. `Invoke-SPDailyEvidenceReportV8.ps1 -StartDate '2026-06-01' -EndDate '2026-06-30'` -- state-driven with privileged breakdown
 
 ### "Which apps haven't been reviewed?"
 
