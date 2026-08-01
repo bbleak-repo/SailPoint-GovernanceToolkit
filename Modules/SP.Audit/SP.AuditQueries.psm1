@@ -8247,6 +8247,121 @@ function Clear-SPAuditAccountCache {
 
 #endregion Campaign Item Cache
 
+#region Cache Population Orchestrator
+
+function Invoke-SPCachePopulate {
+    <#
+    .SYNOPSIS
+        Populates the items cache for all campaigns matching the filters.
+        Pure cache population -- no HTML, no metrics, no decisions.
+    .DESCRIPTION
+        Fetches campaigns from ISC via Get-SPAuditCampaigns, iterates their
+        certifications, and caches items via Get-SPCachedCampaignItems. The cache
+        function handles hit/miss/TTL/seal internally. This function is the
+        shared "make sure the cache has data" step that any downstream consumer
+        (V4b, V4e, V8, state tracking) can call.
+    .PARAMETER DaysBack
+        Campaign lookback window. Default 18.
+    .PARAMETER CampaignName
+        Exact campaign name filter.
+    .PARAMETER CampaignNameStartsWith
+        Campaign name starts-with filter.
+    .PARAMETER CampaignNameContains
+        Campaign name contains filter (case-insensitive, client-side).
+    .PARAMETER Status
+        Campaign status filter (ACTIVE, COMPLETED, etc.).
+    .PARAMETER RefreshCache
+        Force re-fetch even if cache is valid.
+    .PARAMETER CorrelationID
+        Tracing ID.
+    .OUTPUTS
+        [hashtable] @{ Success; CampaignCount; CertCount; ItemCount; Campaigns; Error }
+    .EXAMPLE
+        $result = Invoke-SPCachePopulate -DaysBack 18 -CampaignNameContains 'Daily'
+        Write-Host "Cached $($result.ItemCount) items from $($result.CampaignCount) campaigns"
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$DaysBack = 18,
+        [Parameter()][string]$CampaignName,
+        [Parameter()][string]$CampaignNameStartsWith,
+        [Parameter()][string]$CampaignNameContains,
+        [Parameter()][ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
+        [string[]]$Status,
+        [Parameter()][switch]$RefreshCache,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+
+    $emptyResult = @{ Success = $false; CampaignCount = 0; CertCount = 0; ItemCount = 0; Campaigns = @(); Error = '' }
+
+    try {
+        # Fetch campaigns
+        $campaignParams = @{ DaysBack = $DaysBack; CorrelationID = $CorrelationID }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignName))           { $campaignParams['CampaignName']           = $CampaignName }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $campaignParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains))   { $campaignParams['CampaignNameContains']   = $CampaignNameContains }
+        if ($null -ne $Status -and $Status.Count -gt 0)                 { $campaignParams['Status']                 = $Status }
+
+        $campaignResult = Get-SPAuditCampaigns @campaignParams
+        if (-not $campaignResult.Success -or $null -eq $campaignResult.Data) {
+            $emptyResult.Error = "Campaign fetch failed: $($campaignResult.Error)"
+            return $emptyResult
+        }
+
+        $campaigns = @($campaignResult.Data)
+        if ($campaigns.Count -eq 0) {
+            $emptyResult.Error = "No campaigns found in last $DaysBack day(s)"
+            return $emptyResult
+        }
+
+        Write-Host "    Found $($campaigns.Count) campaign(s)" -ForegroundColor DarkGray
+
+        $totalCerts = 0; $totalItems = 0
+        foreach ($campaign in $campaigns) {
+            $campId = [string]$campaign.id
+            $campName = if ($null -ne $campaign.name) { [string]$campaign.name } else { $campId }
+
+            try {
+                $certResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+                $certifications = @()
+                if ($certResult.Success -and $null -ne $certResult.Data) {
+                    $certifications = @($certResult.Data)
+                }
+                $totalCerts += $certifications.Count
+
+                $itemParams = @{ Campaign = $campaign; Certifications = $certifications; CorrelationID = $CorrelationID }
+                if ($RefreshCache) { $itemParams['NoCache'] = $true; $itemParams['RefreshCache'] = $true }
+
+                $cacheResult = Get-SPCachedCampaignItems @itemParams
+                if ($cacheResult.Success) {
+                    $totalItems += [int]$cacheResult.ItemCount
+                }
+            }
+            catch {
+                Write-Host "    WARN: Failed to cache $campName : $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        return @{
+            Success       = $true
+            CampaignCount = $campaigns.Count
+            CertCount     = $totalCerts
+            ItemCount     = $totalItems
+            Campaigns     = $campaigns
+            Error         = $null
+        }
+    }
+    catch {
+        $emptyResult.Error = "Invoke-SPCachePopulate failed: $($_.Exception.Message)"
+        return $emptyResult
+    }
+}
+
+#endregion Cache Population Orchestrator
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -8275,5 +8390,6 @@ Export-ModuleMember -Function @(
     'Get-SPCachedCampaignSeries',
     'Get-SPAuditEffectiveCacheTtl',
     'Clear-SPAuditItemCache',
-    'Clear-SPAuditAccountCache'
+    'Clear-SPAuditAccountCache',
+    'Invoke-SPCachePopulate'
 )

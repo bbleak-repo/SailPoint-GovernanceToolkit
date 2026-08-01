@@ -811,25 +811,33 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Toolkit\Scripts\Invoke-SPWeekly
    ISC API
       |
       v
-  V4b (fetch + cache + daily-metrics.jsonl)
+  Invoke-SPCachePopulate (module function, shared cache population)
+      |
+      +---> V4b (calls cache populate internally + daily-metrics.jsonl + HTML)
       |
       +---> V4e (read-only, series engine, stable scope key)
-      |          requires: items cache from V4b
+      |          requires: items cache
       |
       +---> V7 (calendar-day visualization from daily-metrics.jsonl)
       |          requires: daily-metrics.jsonl from V4b
       |
       +---> Update-SPStateFiles (populate entitlement-state + reviewer-state)
-      |          requires: items cache from V4b
+      |          requires: items cache
       |
-      +---> V8 (state-powered report, auto-refreshes state files if stale)
-                 requires: state files (auto-creates from cache if missing)
+      +---> V8 (state-powered report)
+                 - auto-refreshes state files from cache if stale
+                 - with -AutoFetch: auto-populates cache from ISC if empty
+                 - single entry point: V8 -AutoFetch -Token <t> does everything
 
   HTML report files (from any of the above)
       |
       +---> Governance Trend Scraper (monthly dashboard from HTML files)
       +---> Pending Reviewer Scraper (chronic non-compliance from HTML files)
 ```
+
+**V8 single entry point** (new): With `-AutoFetch`, V8 detects an empty cache
+and calls `Invoke-SPCachePopulate` to fetch from ISC before proceeding. Without
+`-AutoFetch`, V8 behaves identically to before (read-only from existing data).
 
 ### Script summary
 

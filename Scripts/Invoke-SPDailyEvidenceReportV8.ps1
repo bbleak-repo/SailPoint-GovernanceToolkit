@@ -105,6 +105,15 @@ param(
     [switch]$NoRefresh,
 
     [Parameter()]
+    [switch]$AutoFetch,
+
+    [Parameter()]
+    [string]$Token,
+
+    [Parameter()]
+    [int]$TokenExpiryMinutes = 10,
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -329,6 +338,72 @@ $hasCampaignFilter = $campaignFilter.Count -gt 0
 if ($hasCampaignFilter) {
     $filterDesc = ($campaignFilter.Keys | ForEach-Object { "$_='$($campaignFilter[$_])'" }) -join ', '
     Write-Host "  Campaign:      $filterDesc" -ForegroundColor DarkGray
+}
+
+#endregion
+
+#region Step 0: Data Pipeline Check (opt-in via -AutoFetch)
+
+if ($AutoFetch) {
+    Write-Host '  Step 0: Data pipeline check (-AutoFetch)' -ForegroundColor Cyan
+
+    # Initialize ISC session if -Token provided
+    if (-not [string]::IsNullOrWhiteSpace($Token)) {
+        try {
+            Set-SPBrowserToken -Token $Token -ExpiryMinutes $TokenExpiryMinutes
+            Write-Host '    ISC session initialized from -Token' -ForegroundColor DarkGray
+        }
+        catch {
+            Write-Host "  ERROR: Failed to initialize ISC token: $($_.Exception.Message)" -ForegroundColor Red
+            exit 4
+        }
+    }
+
+    # Check if cache has items
+    $v8CacheDir = $null
+    try {
+        $v8Cfg = Get-SPConfig
+        if ($null -ne $v8Cfg.Audit -and $null -ne $v8Cfg.Audit.PSObject.Properties['CachePath'] -and
+            -not [string]::IsNullOrWhiteSpace($v8Cfg.Audit.CachePath)) {
+            $v8CacheDir = [string]$v8Cfg.Audit.CachePath
+        }
+        elseif ($null -ne $v8Cfg.Audit -and $null -ne $v8Cfg.Audit.PSObject.Properties['OutputPath'] -and
+                -not [string]::IsNullOrWhiteSpace($v8Cfg.Audit.OutputPath)) {
+            $v8CacheDir = Join-Path ([string]$v8Cfg.Audit.OutputPath) '.cache'
+        }
+    } catch { }
+    if ([string]::IsNullOrWhiteSpace($v8CacheDir)) { $v8CacheDir = Join-Path $toolkitRoot (Join-Path 'Audit' '.cache') }
+    if (-not [System.IO.Path]::IsPathRooted($v8CacheDir)) { $v8CacheDir = Join-Path $toolkitRoot $v8CacheDir }
+
+    $v8CacheFiles = @()
+    if (Test-Path $v8CacheDir) {
+        $v8CacheFiles = @(Get-ChildItem -Path $v8CacheDir -Filter 'items-*.jsonl' -File -ErrorAction SilentlyContinue)
+    }
+
+    if ($v8CacheFiles.Count -eq 0) {
+        Write-Host '    Cache is empty -- populating from ISC...' -ForegroundColor Yellow
+
+        $fetchParams = @{ DaysBack = $DaysBack; CorrelationID = $correlationID }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignName))           { $fetchParams['CampaignName']           = $CampaignName }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $fetchParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains))   { $fetchParams['CampaignNameContains']   = $CampaignNameContains }
+        if ($null -ne $Status -and $Status.Count -gt 0)                 { $fetchParams['Status']                 = $Status }
+
+        $fetchResult = Invoke-SPCachePopulate @fetchParams
+        if ($fetchResult.Success) {
+            Write-Host "    Cached $($fetchResult.ItemCount) items from $($fetchResult.CampaignCount) campaign(s), $($fetchResult.CertCount) cert(s)" -ForegroundColor Green
+        }
+        else {
+            Write-Host "    ERROR: Cache population failed: $($fetchResult.Error)" -ForegroundColor Red
+            Write-Host '    Cannot proceed without cached data.' -ForegroundColor Red
+            exit 4
+        }
+    }
+    else {
+        Write-Host "    Cache has $($v8CacheFiles.Count) campaign(s) -- using existing data" -ForegroundColor DarkGray
+    }
+
+    Write-Host ''
 }
 
 #endregion
@@ -1248,7 +1323,21 @@ Write-Host "  Duration: $durationStr" -ForegroundColor DarkGray
 # Exit contract: 5 = no state data at all (documented; previously unreachable --
 # an empty report exited 0 and schedulers never noticed).
 if ($entTotal -eq 0 -and $rvTotal -eq 0) {
-    Write-Host '  No state data available. Run Update-SPStateFiles.ps1 (or remove -NoRefresh).' -ForegroundColor Yellow
+    Write-Host '' -ForegroundColor Red
+    Write-Host '  ERROR: No state data available.' -ForegroundColor Red
+    Write-Host '' -ForegroundColor Yellow
+    Write-Host '  V8 needs cached items to build state files. To populate:' -ForegroundColor Yellow
+    Write-Host '' -ForegroundColor Yellow
+    Write-Host '    Option 1 -- Run V4b first:' -ForegroundColor Yellow
+    Write-Host '      .\Invoke-SPDailyEvidenceReportV4b.ps1 -DaysBack 18 -OutputMode Both' -ForegroundColor White
+    Write-Host '' -ForegroundColor Yellow
+    Write-Host '    Option 2 -- Let V8 fetch automatically:' -ForegroundColor Yellow
+    Write-Host '      .\Invoke-SPDailyEvidenceReportV8.ps1 -DaysBack 18 -AutoFetch -Token <token>' -ForegroundColor White
+    Write-Host '' -ForegroundColor Yellow
+    Write-Host '    Option 3 -- Use settings.json credentials:' -ForegroundColor Yellow
+    Write-Host '      .\Invoke-SPDailyEvidenceReportV8.ps1 -DaysBack 18 -AutoFetch' -ForegroundColor White
+    Write-Host '      (requires Authentication configured in settings.json)' -ForegroundColor DarkGray
+    Write-Host '' -ForegroundColor Red
     exit 5
 }
 exit 0
