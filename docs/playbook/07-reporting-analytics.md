@@ -28,6 +28,9 @@ anyone who needs to know "what report do I give to whom?"
 | Daily Evidence Report (v4b) | `Invoke-SPDailyEvidenceReportV4b.ps1` | CISO, auditors, IAM ops | Daily | Fork of V4 with bug fixes: donut chart, N/A reviewer warning, item-level reviewer %. Same features as V4 | HTML, JSON, JSONL |
 | Daily Evidence Trending (v7) | `Invoke-SPDailyEvidenceReportV7.ps1` | CISO, leadership, IAM ops | Weekly / on-demand | Calendar-day visualization: completion progression, decision distribution, reviewer heatmap, compliance accountability, source-level breakdown. Reads daily-metrics.jsonl (no API calls) | HTML |
 | Escalation Report | `Invoke-SPDeltaCertEscalate.ps1` | IAM ops, managers | Daily | Late reviewer escalation with org hierarchy, per-manager HTML, email routing CSV | HTML, CSV, TXT |
+| State-Powered Evidence (V8) | `Invoke-SPDailyEvidenceReportV8.ps1` | CISO, auditors, IAM ops | Daily / on-demand | 8-section state-driven report: entitlement state KPIs, privileged access breakdown by source, newly decided, chronically unreviewed, dropped scope, reviewer engagement + weekly compliance + heatmap, campaign summary | HTML |
+| Governance Trend Dashboard | `Invoke-SPGovernanceTrendScrape.ps1` | Leadership, CISO | Monthly | Multi-report trend: KPI cards, decision distribution chart, completion/reviewer trend lines, month-over-month comparison, per-day detail. Scraped from existing HTML reports | HTML |
+| Pending Reviewer Tracker | `Invoke-SPPendingReviewerScrape.ps1` | IAM ops, compliance | Weekly | Chronic pending bars, missed-review streaks, heatmap, gaming pattern detection (alternating/day-of-week/declining/burst/bare minimum). Auto-MinMisses scaling | HTML |
 | Weekly Digest | `Invoke-SPWeeklyDigest.ps1` | Governance leadership | Weekly | Campaign activity, health, risk, reviewer performance, remediation | HTML, JSON |
 | Leadership Distribution | `Invoke-SPReportDistribution.ps1` | Per-leader delivery | After campaigns | Band-filtered reports, optionally emailed via SMTP | HTML |
 | Adaptive Composable | `Invoke-SPAdaptiveReport.ps1` | Presentation, analysis | On-demand | KPI cards, heatmap, top-N bars, drill-down tree, group table | HTML |
@@ -275,6 +278,124 @@ for backward compatibility.
 | `Audit/.cache/items-{campaignId}.jsonl` | V4/V4b | V4/V4b (cache) | Cached ISC items per campaign |
 | `Audit/.cache/items-{campaignId}.meta.json` | V4/V4b | V4/V4b (cache) | Cache metadata (TTL, status, seal) |
 | `Audit/Snapshots/{campaignId}/*.json` | V4/V4b | Diff engine | Per-campaign snapshot for cross-campaign diff |
+
+---
+
+## State-Powered Evidence (V8)
+
+V8 reads from pre-computed state files (`entitlement-state.jsonl` + `reviewer-state.jsonl`)
+for fast, accurate reporting without ISC API calls. Target execution: <30 seconds.
+
+### Running V8
+
+```powershell
+# Daily evidence (auto-refreshes state files if stale)
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -OutputMode Both
+
+# June only
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -StartDate '2026-06-01' -EndDate '2026-06-30'
+
+# Filter to Daily Attestation series
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -CampaignNameContains 'Daily'
+
+# Read-only (no state file refresh)
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -NoRefresh
+```
+
+### V8 report sections
+
+| Section | Content |
+|---|---|
+| **1. Entitlement State Summary** | KPI tiles: Approved / Revoked / Pending / Undecided with percentages |
+| **1b. Privileged Access Summary** | Privileged KPIs: total, approved, revoked, exposure (pending+undecided). Per-source breakdown (AD, AWS, ServiceNow, SAP) with decided % per source |
+| **2. Newly Decided** | Entitlements with PENDING/UNDECIDED -> decision transition in the date window |
+| **3. Chronically Unreviewed** | Items with consecutive undecided campaigns >= threshold (default 5) |
+| **4. Dropped from Scope** | Entitlements no longer in any active campaign |
+| **5. Reviewer Engagement Summary** | Engagement score table + KPI tiles |
+| **6. Reviewer Weekly Compliance** | Current ISO week misses per reviewer |
+| **7. Reviewer Engagement Heatmap** | 14-day dayLog grid (C/P/M/U per day) |
+| **8. Campaign Summary** | Per-day metrics from daily-metrics.jsonl |
+
+### Prerequisites
+
+V8 requires state files. Populate them with:
+```powershell
+# Option 1: V8 auto-refreshes on first run (default)
+.\Scripts\Invoke-SPDailyEvidenceReportV8.ps1
+
+# Option 2: Explicit state update
+.\Scripts\Update-SPStateFiles.ps1
+```
+
+---
+
+## Governance Trend Dashboard (Monthly Scraper)
+
+Produces leadership-ready monthly governance metrics by scraping existing daily
+evidence HTML reports. No API calls -- reads the reports you already generate.
+
+### Running the trend dashboard
+
+```powershell
+# June monthly
+.\Scripts\Invoke-SPGovernanceTrendScrape.ps1 -Since '2026-06-01' -Until '2026-06-30'
+
+# Two-month comparison with MoM deltas
+.\Scripts\Invoke-SPGovernanceTrendScrape.ps1 -Since '2026-05-01' -Until '2026-06-30'
+
+# Custom report folder
+.\Scripts\Invoke-SPGovernanceTrendScrape.ps1 -Path 'C:\Reports' -Since '2026-06-01'
+```
+
+### Dashboard sections
+
+| Section | Content |
+|---|---|
+| **Executive KPI Cards** | Campaign days, avg completion, avg reviewer %, revoked items, new scope, priv undecided, revoke rate |
+| **Decision Distribution** | Stacked bar chart (approved/revoked/undecided per day) |
+| **Completion + Reviewer Trend** | Dual-axis line chart (items decided % + reviewer completed %) |
+| **Month-over-Month** | Table with trend arrows (only when data spans 2+ months) |
+| **Campaign Detail** | Per-day breakdown with color-coded completion and status |
+
+---
+
+## Pending Reviewer Tracker (Scraper)
+
+Identifies chronic non-compliant reviewers and detects gaming patterns by scraping
+daily evidence HTML reports.
+
+### Running the tracker
+
+```powershell
+# Default (auto-MinMisses based on campaign count)
+.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -Path .\Audit\daily-evidence -Since '2026-06-01'
+
+# Explicit threshold
+.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -MinMisses 3 -Top 25
+
+# Override file pattern for V4e reports
+.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -FilePattern 'daily-evidence-v4e-*.html'
+```
+
+### Auto-MinMisses
+
+| Campaigns Found | Default MinMisses |
+|---|---|
+| 1-3 | 1 (show all) |
+| 4+ | 3 (focus on chronic) |
+
+### Gaming pattern detection (> 5 campaigns)
+
+| Pattern | What It Catches |
+|---|---|
+| **Alternating** | Miss-complete-miss (avoids streak flags) |
+| **Day-of-week** | Always misses same day (shift worker or gaming) |
+| **Declining** | Strong start, tapering off |
+| **Burst compliance** | Long idle then single completion before escalation |
+| **Bare minimum** | 30-59% miss rate (borderline) |
+
+Each reviewer gets a composite gaming score (0-100) and risk label:
+Monitor (<30), Concerning (30-59), High Risk (60+).
 
 ---
 

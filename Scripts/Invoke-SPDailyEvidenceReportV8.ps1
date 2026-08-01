@@ -745,6 +745,47 @@ if ($inScopeCount -gt 0) {
     $undecidedPct = [math]::Round($undecidedCount / $inScopeCount * 100, 1)
 }
 
+# Privileged breakdown from entitlement state
+$privApprove = 0; $privRevoke = 0; $privPending = 0; $privUndecided = 0; $privTotal = 0
+$privBySource = @{}
+foreach ($sk in $entStateMap.Keys) {
+    $rec = $entStateMap[$sk]
+    $inScope = $true
+    if ($rec.ContainsKey('inCurrentScope')) { $inScope = [bool]$rec['inCurrentScope'] }
+    if (-not $inScope) { continue }
+    $isPriv = $false
+    if ($rec.ContainsKey('isPrivileged')) { try { $isPriv = [bool]$rec['isPrivileged'] } catch { } }
+    if (-not $isPriv) { continue }
+    $privTotal++
+    $state = ''
+    if ($rec.ContainsKey('currentDecision')) { $state = [string]$rec['currentDecision'] }
+    switch ($state.ToUpperInvariant()) {
+        'APPROVE'   { $privApprove++ }
+        'REVOKE'    { $privRevoke++ }
+        'PENDING'   { $privPending++ }
+        'UNDECIDED' { $privUndecided++ }
+        default     { $privPending++ }
+    }
+    # Per-source breakdown for privileged
+    $srcName = ''
+    if ($rec.ContainsKey('sourceName')) { $srcName = [string]$rec['sourceName'] }
+    if ([string]::IsNullOrWhiteSpace($srcName)) { $srcName = 'Unknown' }
+    if (-not $privBySource.ContainsKey($srcName)) { $privBySource[$srcName] = @{ Approve = 0; Revoke = 0; Pending = 0; Undecided = 0; Total = 0 } }
+    $privBySource[$srcName].Total++
+    switch ($state.ToUpperInvariant()) {
+        'APPROVE'   { $privBySource[$srcName].Approve++ }
+        'REVOKE'    { $privBySource[$srcName].Revoke++ }
+        'PENDING'   { $privBySource[$srcName].Pending++ }
+        'UNDECIDED' { $privBySource[$srcName].Undecided++ }
+        default     { $privBySource[$srcName].Pending++ }
+    }
+}
+$privDecided = $privApprove + $privRevoke
+$privDecidedPct = if ($privTotal -gt 0) { [math]::Round($privDecided / $privTotal * 100, 0) } else { 0 }
+$privExposure = $privPending + $privUndecided
+
+Write-Host "    Privileged items:    $privTotal (approved=$privApprove revoked=$privRevoke pending=$privPending undecided=$privUndecided)" -ForegroundColor DarkGray
+
 #endregion
 
 #region Step 5: Build HTML
@@ -822,6 +863,37 @@ if ($lastRunDate -ne '(unknown)' -and $lastRunDate -lt $filterEndDate) {
 [void]$sb.Append('</div>')
 [void]$sb.Append("<p class='note'>In-scope entitlements: $inScopeCount | Total tracked (incl. dropped): $entTotal</p>")
 [void]$sb.Append('</div>')
+
+# ======================== Section 1b: Privileged Access Summary ========================
+if ($privTotal -gt 0) {
+    [void]$sb.Append('<div class="section"><h2>1b. Privileged Access Summary</h2>')
+    $privExposureColor = if ($privExposure -gt 0) { 's-red' } else { 's-green' }
+    $privRevokeColor = if ($privRevoke -gt 0) { 's-red' } else { 's-gray' }
+    [void]$sb.Append('<div class="kpi-row">')
+    [void]$sb.Append("<div class='kpi'><div class='val s-blue'>$privTotal</div><div class='lbl'>Privileged Total</div></div>")
+    [void]$sb.Append("<div class='kpi'><div class='val s-green'>$privApprove</div><div class='lbl'>Priv. Approved</div></div>")
+    [void]$sb.Append("<div class='kpi'><div class='val $privRevokeColor'>$privRevoke</div><div class='lbl'>Priv. Revoked</div></div>")
+    [void]$sb.Append("<div class='kpi'><div class='val $privExposureColor'>$privExposure</div><div class='lbl'>Priv. Exposure</div><div class='pct'>$privPending pending + $privUndecided undecided</div></div>")
+    [void]$sb.Append("<div class='kpi'><div class='val'>${privDecidedPct}%</div><div class='lbl'>Priv. Decided</div></div>")
+    [void]$sb.Append('</div>')
+
+    # Per-source privileged breakdown table
+    if ($privBySource.Count -gt 0) {
+        [void]$sb.Append("<table class='report'><tr><th>Source</th><th style='text-align:right'>Total</th><th style='text-align:right'>Approved</th><th style='text-align:right'>Revoked</th><th style='text-align:right'>Pending</th><th style='text-align:right'>Undecided</th><th style='text-align:center'>Decided %</th></tr>")
+        foreach ($srcName in ($privBySource.Keys | Sort-Object)) {
+            $ps = $privBySource[$srcName]
+            $psDecided = $ps.Approve + $ps.Revoke
+            $psPct = if ($ps.Total -gt 0) { [math]::Round($psDecided / $ps.Total * 100, 0) } else { 0 }
+            $psPctClass = if ($psPct -ge 80) { 's-green' } elseif ($psPct -ge 50) { 's-amber' } else { 's-red' }
+            $psUndStyle = if (($ps.Pending + $ps.Undecided) -gt 0) { " style='color:#b00020;font-weight:600'" } else { '' }
+            [void]$sb.Append("<tr><td style='font-weight:600'>$(ConvertTo-Safe $srcName)</td><td style='text-align:right'>$($ps.Total)</td><td style='text-align:right'>$($ps.Approve)</td><td style='text-align:right;color:#b00020'>$($ps.Revoke)</td><td style='text-align:right'$psUndStyle>$($ps.Pending)</td><td style='text-align:right'$psUndStyle>$($ps.Undecided)</td><td style='text-align:center' class='$psPctClass'>${psPct}%</td></tr>")
+        }
+        [void]$sb.Append('</table>')
+    }
+
+    [void]$sb.Append("<p class='note'>Privileged entitlements carry elevated risk. Exposure = items NOT genuinely reviewed (pending + undecided/auto-approved). Per-source breakdown shows which systems have the highest unreviewed privileged access.</p>")
+    [void]$sb.Append('</div>')
+}
 
 # ======================== Section 2: Newly Decided ========================
 [void]$sb.Append('<div class="section"><h2>2. Newly Decided</h2>')
