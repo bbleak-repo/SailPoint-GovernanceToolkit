@@ -321,6 +321,7 @@
         'Invoke-SPStateTracking'
         'Read-SPStateFiles'
         'Resolve-SPReportDateRange'
+        'Select-SPSeriesByCampaignName'
     )
 
     # Do not export variables or aliases from nested modules

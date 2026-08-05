@@ -573,8 +573,81 @@ function Resolve-SPReportDateRange {
     }
 }
 
+function Select-SPSeriesByCampaignName {
+    <#
+    .SYNOPSIS
+        Filters a series list by campaign name substring or prefix match.
+    .DESCRIPTION
+        Every cache-based report script (V4c/V4d/V4e/V8) needs the same campaign
+        name filtering on series instances. This function centralizes it so scripts
+        call one line instead of duplicating the filter block.
+
+        Instances whose CampaignName does not match are removed. Series that drop
+        below MinInstances after filtering are removed entirely.
+    .PARAMETER SeriesList
+        Array of series hashtables from Get-SPCachedCampaignSeries.
+    .PARAMETER CampaignNameContains
+        Substring filter (case-insensitive). Instances whose CampaignName does not
+        contain this string are removed.
+    .PARAMETER CampaignNameStartsWith
+        Prefix filter (case-insensitive).
+    .PARAMETER CampaignName
+        Exact match filter (case-insensitive).
+    .PARAMETER MinInstances
+        Minimum remaining instances for a series to survive filtering. Default 1.
+    .OUTPUTS
+        Filtered array of series hashtables.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$SeriesList,
+
+        [string]$CampaignNameContains,
+        [string]$CampaignNameStartsWith,
+        [string]$CampaignName,
+        [int]$MinInstances = 1
+    )
+
+    $hasFilter = (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) -or
+                 (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) -or
+                 (-not [string]::IsNullOrWhiteSpace($CampaignName))
+    if (-not $hasFilter) { return $SeriesList }
+
+    $filtered = [System.Collections.Generic.List[object]]::new()
+    foreach ($s in $SeriesList) {
+        $kept = [System.Collections.Generic.List[object]]::new()
+        foreach ($inst in @($s.Instances)) {
+            $cn = [string]$inst.CampaignName
+            $pass = $true
+            if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains) -and
+                $cn.IndexOf($CampaignNameContains, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                $pass = $false
+            }
+            if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith) -and
+                -not $cn.StartsWith($CampaignNameStartsWith, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $pass = $false
+            }
+            if (-not [string]::IsNullOrWhiteSpace($CampaignName) -and
+                -not $cn.Equals($CampaignName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $pass = $false
+            }
+            if ($pass) { $kept.Add($inst) }
+        }
+        if ($kept.Count -ge $MinInstances) {
+            $s.Instances = @($kept.ToArray())
+            $s.InstanceCount = $kept.Count
+            $filtered.Add($s)
+        }
+    }
+    return @($filtered.ToArray())
+}
+
 Export-ModuleMember -Function @(
     'Invoke-SPStateTracking',
     'Read-SPStateFiles',
-    'Resolve-SPReportDateRange'
+    'Resolve-SPReportDateRange',
+    'Select-SPSeriesByCampaignName'
 )

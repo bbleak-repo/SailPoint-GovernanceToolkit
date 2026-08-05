@@ -24,6 +24,11 @@
 .PARAMETER FilePattern
     Wildcard for the report files. Default: 'Daily-Attestation-Evidence-Report-*.html'.
 
+.PARAMETER DaysBack
+    Number of report DAYS to include (not calendar days). If the folder has reports for
+    Mon/Tue/Wed/Thu/Fri and you pass -DaysBack 3, it takes the 3 most recent report days
+    (Wed/Thu/Fri). Overrides -Since when set. Default 0 = disabled (use Since/Until).
+
 .PARAMETER Since
     Optional date string (e.g. '2026-06-01'). Only reports on/after this date are included.
 
@@ -54,12 +59,14 @@
 param(
     [Parameter()][string]$Path = '.\Audit\daily-evidence',
     [Parameter()][string]$FilePattern = 'Daily-Attestation-Evidence-Report-*.html',
+    [Parameter()][int]$DaysBack = 0,
     [Parameter()][string]$Since,
     [Parameter()][string]$Until,
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'HTML', 'Both')][string]$OutputMode = 'Both',
     [Parameter()][int]$Top = 0,
     [Parameter()][int]$MinMisses = -1,
+    [Parameter()][switch]$ShowTrend,
     [Parameter()][Alias('?')][switch]$Help
 )
 
@@ -167,26 +174,138 @@ function Get-ReviewerStreak {
     return @{ Max = $max; Start = $maxStart; End = $maxEnd; Total = $total }
 }
 
+function Get-ReviewerTrend {
+    # Splits the report window into first-half and second-half by REPORT DAYS (not
+    # calendar days). Compares the reviewer's outstanding rate in each half.
+    #
+    # 5-day example: first half = days 1-2, second half = days 3-5.
+    #   Alice pending Mon,Tue,Wed but clear Thu,Fri -> first 2/2=100%, second 1/3=33% -> Improving
+    #   Bob clear Mon,Tue but pending Wed,Thu,Fri   -> first 0/2=0%,   second 3/3=100% -> Lagging
+    #   Carol pending all 5                          -> first 2/2=100%, second 3/3=100% -> Steady
+    #
+    # "Recently flagged": if the reviewer's total outstanding count equals the MinMisses
+    # threshold, they just crossed the visibility line. Don't label them Lagging/Improving
+    # -- they're new to the report and deserve a neutral indicator.
+    #
+    # Returns: @{ Direction = 'Improving'|'Lagging'|'Steady'|'New'|...; Color; Symbol }
+    param([string]$Name, [string[]]$SortedDateLabels, $Grid, [int]$MinMissesThreshold = 0)
+
+    $totalDays = $SortedDateLabels.Count
+    if ($totalDays -lt 2) { return @{ Direction = 'New'; Color = '#3498db'; Symbol = '*' } }
+
+    # Check if reviewer has enough data points
+    $reviewerDates = $Grid[$Name]
+    if ($null -eq $reviewerDates -or $reviewerDates.Count -lt 1) {
+        return @{ Direction = 'New'; Color = '#3498db'; Symbol = '*' }
+    }
+    if ($reviewerDates.Count -eq 1) {
+        # Single appearance -- check if it's in the recent half
+        $midpoint = [int][math]::Floor($totalDays / 2)
+        $theDate = @($reviewerDates)[0]
+        $idx = [array]::IndexOf($SortedDateLabels, $theDate)
+        if ($idx -ge $midpoint) {
+            return @{ Direction = 'New this period'; Color = '#3498db'; Symbol = '*' }
+        }
+        else {
+            return @{ Direction = 'Resolved'; Color = '#27ae60'; Symbol = 'v' }
+        }
+    }
+
+    # "Recently flagged": reviewer just crossed the MinMisses threshold. They're new
+    # to this report -- labeling them Lagging/Improving is premature. Give them a neutral
+    # indicator that says "we see you, let's see how the next few days go."
+    if ($MinMissesThreshold -gt 0 -and $reviewerDates.Count -eq $MinMissesThreshold) {
+        return @{ Direction = 'Recently flagged'; Color = '#3498db'; Symbol = '*' }
+    }
+
+    # Split into halves
+    $midpoint = [int][math]::Floor($totalDays / 2)
+    $firstHalfDays  = @($SortedDateLabels[0..($midpoint - 1)])
+    $secondHalfDays = @($SortedDateLabels[$midpoint..($totalDays - 1)])
+
+    $firstCount  = 0; foreach ($d in $firstHalfDays)  { if ($reviewerDates.Contains($d)) { $firstCount++ } }
+    $secondCount = 0; foreach ($d in $secondHalfDays) { if ($reviewerDates.Contains($d)) { $secondCount++ } }
+
+    # Detect alternating pattern: count state transitions (pending->clear or clear->pending).
+    # Mon-on/Tue-off/Wed-on/Thu-on/Fri-off = 3 transitions. If transitions >= half the days,
+    # the reviewer is bouncing -- "Inconsistent" is a better label than Improving/Lagging.
+    $transitions = 0
+    $prevPending = $false
+    $isFirst = $true
+    foreach ($d in $SortedDateLabels) {
+        $isPending = $reviewerDates.Contains($d)
+        if (-not $isFirst -and $isPending -ne $prevPending) { $transitions++ }
+        $prevPending = $isPending
+        $isFirst = $false
+    }
+    $transitionThreshold = [int][math]::Floor($totalDays / 2)
+    if ($transitions -ge $transitionThreshold -and $transitions -ge 2) {
+        return @{ Direction = 'Inconsistent'; Color = '#e67e22'; Symbol = '~' }
+    }
+
+    $firstRate  = if ($firstHalfDays.Count -gt 0) { $firstCount / $firstHalfDays.Count } else { 0 }
+    $secondRate = if ($secondHalfDays.Count -gt 0) { $secondCount / $secondHalfDays.Count } else { 0 }
+
+    $delta = $secondRate - $firstRate
+    if ($delta -lt -0.01) {
+        return @{ Direction = 'Improving'; Color = '#27ae60'; Symbol = 'v' }
+    }
+    elseif ($delta -gt 0.01) {
+        return @{ Direction = 'Lagging'; Color = '#c0392b'; Symbol = '^' }
+    }
+    else {
+        return @{ Direction = 'Steady'; Color = '#888'; Symbol = '-' }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Inline-SVG chart builders (no JS -- Word/email safe), V7-style palette.
 # ---------------------------------------------------------------------------
 function New-SvgChronicBars {
-    param($Rows, [int]$Total)   # Rows: @(@{Name;Count}) sorted desc
-    if ($Rows.Count -eq 0) { return '<p style="color:#777">No pending reviewers found.</p>' }
-    $barH = 22; $gap = 6; $labelW = 230; $valW = 120; $maxBarW = 460
-    $h = ($Rows.Count * ($barH + $gap)) + 10
-    $w = $labelW + $maxBarW + $valW
+    param($Rows, [int]$Total, $TrendData)
+    if ($Rows.Count -eq 0) { return '<p style="color:#27ae60">All reviewers completed their attestations -- no outstanding reviews.</p>' }
+    $hasTrend = ($null -ne $TrendData -and $TrendData.Count -gt 0)
+    $barH = 18; $gap = 4; $labelW = 180; $maxBarW = 220
+    $h = ($Rows.Count * ($barH + $gap)) + 6
+    $w = if ($hasTrend) { 720 } else { 560 }
     $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append("<svg width='$w' height='$h' xmlns='http://www.w3.org/2000/svg' font-family='Segoe UI,Arial,sans-serif' font-size='12'>")
-    $y = 4
+    [void]$sb.Append("<svg width='$w' height='$h' xmlns='http://www.w3.org/2000/svg' font-family='Segoe UI,Arial,sans-serif' font-size='11'>")
+    $y = 2
     foreach ($r in $Rows) {
         $pct = if ($Total -gt 0) { $r.Count / $Total } else { 0 }
         $bw = [int]($maxBarW * $pct); if ($bw -lt 2 -and $r.Count -gt 0) { $bw = 2 }
         $fill = if ($pct -ge 0.6) { '#c0392b' } elseif ($pct -ge 0.3) { '#e67e22' } else { '#27ae60' }
         $nm = ConvertTo-Safe $r.Name
-        [void]$sb.Append("<text x='0' y='$($y+15)' fill='#222'>$nm</text>")
-        [void]$sb.Append("<rect x='$labelW' y='$y' width='$bw' height='$barH' rx='3' fill='$fill'></rect>")
-        [void]$sb.Append("<text x='$($labelW+$bw+6)' y='$($y+15)' fill='#444'>$($r.Count)/$Total ($([int]($pct*100))%)</text>")
+        [void]$sb.Append("<text x='0' y='$($y+13)' fill='#222' font-size='11'>$nm</text>")
+        [void]$sb.Append("<rect x='$labelW' y='$y' width='$bw' height='$barH' rx='2' fill='$fill'/>")
+        $valText = "$($r.Count)/$Total ($([int]($pct*100))%)"
+        $valX = $labelW + $bw + 4
+        [void]$sb.Append("<text x='$valX' y='$($y+13)' fill='#444' font-size='11'>$valText</text>")
+
+        if ($hasTrend -and $TrendData.ContainsKey($r.Name)) {
+            $tr = $TrendData[$r.Name]
+            $tColor = [string]$tr.Color
+            $tDir   = [string]$tr.Direction
+            $tSym   = [string]$tr.Symbol
+            # Fixed position column for trend (right-aligned area)
+            $trendX = $labelW + $maxBarW + 110
+            $triY = $y + 4
+            if ($tSym -eq 'v') {
+                [void]$sb.Append("<polygon points='$trendX,$triY $($trendX+7),$triY $($trendX+3),$($triY+6)' fill='$tColor'/>")
+            }
+            elseif ($tSym -eq '^') {
+                [void]$sb.Append("<polygon points='$trendX,$($triY+6) $($trendX+7),$($triY+6) $($trendX+3),$triY' fill='$tColor'/>")
+            }
+            elseif ($tSym -eq '~') {
+                # Wavy line for inconsistent
+                [void]$sb.Append("<text x='$trendX' y='$($y+13)' fill='$tColor' font-size='13' font-weight='600'>~</text>")
+            }
+            else {
+                [void]$sb.Append("<text x='$($trendX+1)' y='$($y+13)' fill='$tColor' font-size='12' font-weight='600'>$tSym</text>")
+            }
+            [void]$sb.Append("<text x='$($trendX+11)' y='$($y+13)' fill='$tColor' font-size='10'>$tDir</text>")
+        }
+
         $y += $barH + $gap
     }
     [void]$sb.Append('</svg>')
@@ -250,6 +369,28 @@ function New-SvgDailyTrend {
 if (-not (Test-Path -LiteralPath $Path)) { Write-Host "ERROR: Path not found: $Path" -ForegroundColor Red; exit 2 }
 $files = @(Get-ChildItem -LiteralPath $Path -Filter $FilePattern -File | Sort-Object Name)
 if ($files.Count -eq 0) { Write-Host "No files matching '$FilePattern' in $Path" -ForegroundColor Yellow; exit 0 }
+
+# -DaysBack N: resolve from the actual report file dates (not calendar days).
+# Scans all files for their dates, takes the N most recent unique dates, and
+# sets $Since to the oldest of those N dates. Overrides -Since when set.
+if ($DaysBack -gt 0) {
+    $allFileDates = [System.Collections.Generic.List[datetime]]::new()
+    foreach ($f in $files) {
+        $d = Resolve-ReportDate -File $f
+        if ($null -ne $d -and $d.Date -ne [datetime]::MinValue) {
+            if (-not $allFileDates.Contains($d.Date)) { $allFileDates.Add($d.Date) }
+        }
+    }
+    $sortedDates = @($allFileDates | Sort-Object)
+    if ($sortedDates.Count -gt $DaysBack) {
+        $cutoffDate = $sortedDates[$sortedDates.Count - $DaysBack]
+        $Since = $cutoffDate.ToString('yyyy-MM-dd')
+        Write-Host "  -DaysBack $DaysBack -> using $DaysBack most recent report days (since $Since)" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "  -DaysBack $DaysBack -> only $($sortedDates.Count) report day(s) available, using all" -ForegroundColor DarkGray
+    }
+}
 
 $sinceDt = $null; $untilDt = $null
 if ($Since) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Since, [ref]$tmp)) { $sinceDt = $tmp.Date } }
@@ -378,7 +519,7 @@ function Get-ReviewerPattern {
 
     # 6. Chronic: miss rate >= 60%
     if ($missRate -ge 0.6) {
-        $patterns += "Chronic non-compliance ($([math]::Round($missRate*100))% miss rate)"
+        $patterns += "Escalation recommended ($([math]::Round($missRate*100))% outstanding rate)"
     }
 
     # Gaming score: 0-100
@@ -397,13 +538,6 @@ function Get-ReviewerPattern {
     return @{ Patterns = $patterns; Score = $score; Label = $label }
 }
 
-# Run pattern detection when > 5 campaigns
-$patternResults = @{}
-if ($total -gt 5) {
-    foreach ($r in $rows) {
-        $patternResults[$r.Name] = Get-ReviewerPattern -Name $r.Name -DistinctDates $distinctDates -ByDate $byDate -TotalDays $distinctCount -MissCount $r.Count
-    }
-}
 $shown = if ($Top -gt 0) { @($rows | Select-Object -First $Top) } else { $rows }
 # Per-DAY pending counts (union across same-day report files), aligned with $dateLabels.
 $dayReviewerSets = @{}
@@ -425,6 +559,15 @@ foreach ($rep in $reports) {
 }
 $distinctDates = @($byDate.Keys | ForEach-Object { [datetime]$_ } | Sort-Object)
 $distinctCount = $distinctDates.Count
+
+# Run pattern detection when > 5 campaigns (must run AFTER $byDate/$distinctDates are built)
+$patternResults = @{}
+if ($total -gt 5) {
+    foreach ($r in $rows) {
+        $patternResults[$r.Name] = Get-ReviewerPattern -Name $r.Name -DistinctDates $distinctDates -ByDate $byDate -TotalDays $distinctCount -MissCount $r.Count
+    }
+}
+
 # Rule: fewer than 3 report files -> flag at 2+ consecutive days; 3+ files -> flag at 3+ in a row.
 $streakThreshold = if ($reports.Count -lt 3) { 2 } else { 3 }
 $streakRows = @($rows | ForEach-Object {
@@ -442,14 +585,14 @@ $flaggedCount = @($streakRows | Where-Object Flagged).Count
 # ---- Console ----
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host ''
-    Write-Host "Pending-Reviewer scrape: $total day(s) from $($reports.Count) report file(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " (>= $MinMisses missed days; $excludedByMinMisses single/low-miss reviewer(s) excluded)" })" -ForegroundColor Cyan
+    Write-Host "Reviewer compliance scrape: $total day(s) from $($reports.Count) report file(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " (>= $MinMisses outstanding days; $excludedByMinMisses low-count reviewer(s) excluded)" })" -ForegroundColor Cyan
     $shown | Select-Object Name, Count, @{N='OutOf';E={$total}}, @{N='Pct';E={"$($_.Pct)%"}} | Format-Table -AutoSize | Out-String | Write-Host
     if ($flaggedCount -gt 0) {
-        Write-Host "Missed-review streaks (>= $streakThreshold consecutive day(s)): $flaggedCount reviewer(s) flagged" -ForegroundColor Yellow
+        Write-Host "Consecutive outstanding reviews (>= $streakThreshold day(s)): $flaggedCount reviewer(s) identified" -ForegroundColor Yellow
         $streakRows | Where-Object Flagged | Select-Object Name, Streak, Window, TotalDays | Format-Table -AutoSize | Out-String | Write-Host
     }
     else {
-        Write-Host "Missed-review streaks: none reached the $streakThreshold-consecutive-day threshold." -ForegroundColor Green
+        Write-Host "Consecutive outstanding reviews: none reached the $streakThreshold-day threshold." -ForegroundColor Green
     }
 
     # Gaming / Pattern detection output
@@ -478,7 +621,22 @@ if ($OutputMode -in @('HTML', 'Both')) {
     $outFile = Join-Path $OutputPath "Pending-Reviewer-Tracker-$stamp.html"
 
     $reviewerOrder = @($shown | ForEach-Object { $_.Name })
-    $barSvg  = New-SvgChronicBars -Rows $shown -Total $total
+
+    # Trend analysis (opt-in via -ShowTrend): compare first-half vs second-half engagement
+    $trendDataMap = $null
+    if ($ShowTrend -and $dateLabels.Count -ge 2) {
+        $trendDataMap = @{}
+        foreach ($r in $shown) {
+            $trendDataMap[$r.Name] = Get-ReviewerTrend -Name $r.Name -SortedDateLabels $dateLabels -Grid $grid -MinMissesThreshold $MinMisses
+        }
+        $improving    = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Improving' }).Count
+        $lagging      = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Lagging' }).Count
+        $inconsistent = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Inconsistent' }).Count
+        $steady       = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Steady' }).Count
+        Write-Host "  Trend analysis: $improving improving, $lagging lagging, $inconsistent inconsistent, $steady steady" -ForegroundColor DarkGray
+    }
+
+    $barSvg  = New-SvgChronicBars -Rows $shown -Total $total -TrendData $trendDataMap
     $heatSvg = New-SvgHeatmap -Reviewers $reviewerOrder -Dates $dateLabels -Grid $grid
     $trendSvg = New-SvgDailyTrend -Dates $dateLabels -Counts $dailyCounts
 
@@ -494,7 +652,7 @@ if ($OutputMode -in @('HTML', 'Both')) {
     }) -join "`n"
 
     $doc = @"
-<!DOCTYPE html><html><head><meta charset='utf-8'><title>Pending Reviewer Tracker</title>
+<!DOCTYPE html><html><head><meta charset='utf-8'><title>Reviewer Attestation Compliance Tracker</title>
 <style>
 body{font-family:Segoe UI,Arial,sans-serif;color:#222;margin:18px;background:#fff}
 h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:22px 0 8px;border-bottom:1px solid #e1e4e8;padding-bottom:4px}
@@ -504,24 +662,25 @@ table.report th,table.report td{border:1px solid #e1e4e8;padding:4px 8px}
 table.report th{background:#f6f8fa;text-align:left}
 .note{color:#777;font-size:11px;margin-top:4px}
 </style></head><body>
-<h1>Pending / Undecided Reviewer Tracker</h1>
+<h1>Reviewer Attestation Compliance Tracker</h1>
 <div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total day(s) from $($reports.Count) report file(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " &nbsp;|&nbsp; min $MinMisses missed days ($excludedByMinMisses excluded)" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
-<div class='note'>Scraped from the day-end evidence reports' Pending/Undecided reviewer tables. A reviewer is counted once per report. (Bridge view until cache-based trending is fully wired.)</div>
+<div class='note'>Sourced from daily evidence reports. Identifies reviewers with outstanding attestation decisions. A reviewer is counted once per report day.</div>
 
-<h2>1. Chronic Pending &mdash; days pending out of $total day(s)</h2>
+<h2>1. Reviewer Escalations Pending &mdash; outstanding attestations across $total day(s)</h2>
+$(if ($false) { '' })
 $barSvg
 
-<h2>2. Missed-Review Streak Flags &mdash; flagged at &ge; $streakThreshold consecutive day(s)</h2>
-<div class='note'>Rule: $thresholdDesc. Data window: $distinctCount day(s) across $($reports.Count) report(s). Flagged: $flaggedCount reviewer(s). A missing report day or a not-pending day breaks a streak. (High non-consecutive totals already show in section 1 and the heatmap.)</div>
-<table class='report'><thead><tr><th>Reviewer</th><th>Longest Streak (days in a row)</th><th>Streak Window</th><th>Total Days Pending (of $distinctCount)</th><th>Status</th></tr></thead>
+<h2>2. Consecutive Outstanding Reviews &mdash; flagged at &ge; $streakThreshold consecutive day(s)</h2>
+<div class='note'>Rule: $thresholdDesc. Data window: $distinctCount day(s) across $($reports.Count) report(s). Flagged: $flaggedCount reviewer(s). A completed day or a gap between reports resets the consecutive count.</div>
+<table class='report'><thead><tr><th>Reviewer</th><th>Longest Consecutive Days</th><th>Window</th><th>Total Days Outstanding (of $distinctCount)</th><th>Status</th></tr></thead>
 <tbody>
 $streakTableRows
 </tbody></table>
 
-<h2>3. Reviewer &times; Date Heatmap &mdash; pending (red) by day</h2>
+<h2>3. Reviewer &times; Date Heatmap &mdash; outstanding (red) by day</h2>
 <div style='overflow-x:auto'>$heatSvg</div>
 
-<h2>4. Daily Distinct-Pending Trend</h2>
+<h2>4. Daily Outstanding Reviewer Trend</h2>
 <div style='overflow-x:auto'>$trendSvg</div>
 
 $(if ($patternResults.Count -gt 0) {
@@ -536,16 +695,16 @@ $(if ($patternResults.Count -gt 0) {
         }) -join "`n"
 @"
 <h2>5. Engagement Pattern Analysis</h2>
-<div class='note'>Detects reviewers who may be gaming the system or showing concerning engagement patterns.
-Score: 0-29 = Monitor, 30-59 = Concerning, 60+ = High Risk. Patterns: Alternating (miss-complete-miss avoids streaks),
-Day-of-week (always skips same day), Declining (strong start, tapering off), Burst (long idle then one completion
-before escalation), Bare minimum (30-59% miss rate). Only runs when &gt; 5 campaign days.</div>
-<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:center'>Score</th><th>Risk Level</th><th>Patterns Detected</th></tr></thead>
+<div class='note'>Identifies reviewers with recurring engagement patterns that may require follow-up.
+Score: 0-29 = Monitor, 30-59 = Needs Attention, 60+ = Escalation Recommended. Patterns: Alternating (inconsistent completion),
+Day-of-week (regularly unavailable on a specific day), Declining (decreasing engagement over time), Burst (extended inactivity
+followed by brief activity), Below threshold (30-59% completion rate). Only runs when &gt; 5 campaign days.</div>
+<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:center'>Score</th><th>Follow-Up Level</th><th>Patterns Identified</th></tr></thead>
 <tbody>
 $ptRows
 </tbody></table>
 "@
-    } else { "<h2>5. Engagement Pattern Analysis</h2><p style='color:#27ae60'>No concerning patterns detected.</p>" }
+    } else { "<h2>5. Engagement Pattern Analysis</h2><p style='color:#27ae60'>No recurring patterns identified -- all reviewers within expected engagement norms.</p>" }
 } else { '' })
 
 <h2>Detail</h2>

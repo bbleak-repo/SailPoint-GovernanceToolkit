@@ -52,6 +52,10 @@ function Get-SPSeriesProp {
 # Pattern is matched case-insensitively against the campaign name; the matched substring
 # is stripped to form the raw stem and reported as PeriodToken.
 $script:SPSeriesTemporalLadder = @(
+    # a0. ISC day-of-week + long date: "Monday, June 8, 2026" (the format ISC uses for daily campaign names).
+    #     Must precede ALL other patterns -- the bare-year pattern (f) would eat only "2026" and leave
+    #     "Monday, June 8," in the stem, producing a unique stem per day (0 series after MinInstances=2).
+    @{ Pattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}'; Type = 'Daily'; Confidence = 'High' }
     # a. ISO date / datetime: 2026-06-30 and 2026-06-30T23:29:02Z (and fractional seconds).
     @{ Pattern = '\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?Z?)?'; Type = 'Daily';     Confidence = 'High' }
     # b. Quarter -- all coworker variants: 1Q2026, Q1 2026, Q1-2026, 2026 Q1.

@@ -99,6 +99,12 @@ param(
     [switch]$IncludeUnverified,
 
     [Parameter()]
+    [string]$CampaignNameContains,
+
+    [Parameter()]
+    [string]$CampaignNameStartsWith,
+
+    [Parameter()]
     [Alias('Path')]
     [string]$CachePath,
 
@@ -274,6 +280,12 @@ $cacheDir = [string]$seriesRes.Data.CacheDir
 $seriesList = @($seriesRes.Data.Series)
 Write-Host "    Cache dir: $cacheDir" -ForegroundColor DarkGray
 Write-Host "    Series found: $($seriesList.Count) (instances kept: $($seriesRes.Data.InstanceCount))" -ForegroundColor DarkGray
+
+# Campaign name filter (shared helper from SP.StateOrchestrator)
+$seriesList = Select-SPSeriesByCampaignName -SeriesList $seriesList `
+    -CampaignNameContains $CampaignNameContains `
+    -CampaignNameStartsWith $CampaignNameStartsWith `
+    -MinInstances $MinInstances
 
 #endregion
 
