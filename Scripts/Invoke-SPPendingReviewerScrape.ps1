@@ -680,6 +680,9 @@ if ($OutputMode -in @('Console', 'Both')) {
 # ---- HTML ----
 if ($OutputMode -in @('HTML', 'Both')) {
     if (-not $OutputPath) { $OutputPath = $Path }
+    if (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
+        $OutputPath = [System.IO.Path]::GetFullPath((Join-Path $PWD $OutputPath))
+    }
     if (-not (Test-Path -LiteralPath $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $outFile = Join-Path $OutputPath "Pending-Reviewer-Tracker-$stamp.html"
