@@ -25,12 +25,14 @@ anyone who needs to know "what report do I give to whom?"
 | Daily Evidence Report | `Invoke-SPDailyEvidenceReport.ps1` | CISO, VP Security, auditors | Daily | 6-KPI executive dashboard + domino risk tracker + audit evidence registers | HTML, JSON, JSONL |
 | Daily Evidence Report (v2) | `Invoke-SPDailyEvidenceReportV2.ps1` | CISO, VP Security, auditors | Daily | Lean rewrite: per-campaign executive summary (donut), scope, completion, reviewer accountability, decision summary (no KPI dashboard) | HTML, JSONL |
 | Daily Evidence Report (v4) | `Invoke-SPDailyEvidenceReportV4.ps1` | CISO, auditors, IAM ops | Daily | Focused evidence: KPI dashboard, campaign completion with undecided detection (idNowAutoApproved), revoked register, new scope, reviewer accountability. Writes daily-metrics.jsonl for V7 | HTML, JSON, JSONL |
-| Daily Evidence Report (v4b) | `Invoke-SPDailyEvidenceReportV4b.ps1` | CISO, auditors, IAM ops | Daily | Fork of V4 with bug fixes: donut chart, N/A reviewer warning, item-level reviewer %. Same features as V4 | HTML, JSON, JSONL |
+| Daily Evidence Report (v4b) | `Invoke-SPDailyEvidenceReportV4b.ps1` | CISO, auditors, IAM ops | Daily | Fork of V4 with bug fixes: donut chart, N/A reviewer warning, item-level reviewer %. Same features as V4. CAUTION: its diff-based "Newly Decided" flags routine catch-up approvals on single-campaign daily runs -- use V4g/V8 (state DB) for authoritative newly-decided | HTML, JSON, JSONL |
+| Daily Evidence Report (v4g) | `Invoke-SPDailyEvidenceReportV4g.ps1` | CISO, auditors, IAM ops | Daily | V4 + persistent entitlement state DB (entitlement-state.jsonl). Authoritative Newly Decided (observed PENDING/UNDECIDED -> decided transitions only; first-seen-already-decided and reassignment re-approvals excluded), Re-Approved After Revoke register, honest APPROVE/REVOKE/PENDING/UNDECIDED states (idNowAutoApproved-aware) | HTML, JSON, JSONL |
 | Daily Evidence Trending (v7) | `Invoke-SPDailyEvidenceReportV7.ps1` | CISO, leadership, IAM ops | Weekly / on-demand | Calendar-day visualization: completion progression, decision distribution, reviewer heatmap, compliance accountability, source-level breakdown. Reads daily-metrics.jsonl (no API calls) | HTML |
 | Escalation Report | `Invoke-SPDeltaCertEscalate.ps1` | IAM ops, managers | Daily | Late reviewer escalation with org hierarchy, per-manager HTML, email routing CSV | HTML, CSV, TXT |
-| State-Powered Evidence (V8) | `Invoke-SPDailyEvidenceReportV8.ps1` | CISO, auditors, IAM ops | Daily / on-demand | 8-section state-driven report: entitlement state KPIs, privileged access breakdown by source, newly decided, chronically unreviewed, dropped scope, reviewer engagement + weekly compliance + heatmap, campaign summary | HTML |
+| State-Powered Evidence (V8) | `Invoke-SPDailyEvidenceReportV8.ps1` | CISO, auditors, IAM ops | Daily / on-demand | 8-section state-driven report: entitlement state KPIs, privileged access breakdown by source, newly decided + re-approved after revoke, chronically unreviewed, dropped scope, reviewer engagement + weekly compliance + heatmap, campaign summary | HTML |
 | Governance Trend Dashboard | `Invoke-SPGovernanceTrendScrape.ps1` | Leadership, CISO | Monthly | Multi-report trend: KPI cards, decision distribution chart, completion/reviewer trend lines, month-over-month comparison, per-day detail. Scraped from existing HTML reports | HTML |
-| Pending Reviewer Tracker | `Invoke-SPPendingReviewerScrape.ps1` | IAM ops, compliance | Weekly | Chronic pending bars, missed-review streaks, heatmap, gaming pattern detection (alternating/day-of-week/declining/burst/bare minimum). Auto-MinMisses scaling | HTML |
+| Pending Reviewer Tracker | `Invoke-SPPendingReviewerScrape.ps1` | IAM ops, compliance | Weekly | Chronic pending bars, missed-review streaks (consecutive REPORT days -- weekends do not reset), heatmap, gaming pattern detection (alternating/day-of-week/declining/burst/bare minimum). Auto-MinMisses scaling. Scrapes production daily-evidence-v4b-*.html by default | HTML |
+| Decision Activity Tracker | `Invoke-SPDecisionScrape.ps1` | IAM ops, auditors | Weekly / on-demand | Revoked + new-scope decisions scraped from daily evidence HTML: de-duplicates the cumulative daily registers, buckets by each item's own Decision Date, KPI tiles incl. approved campaign-to-date, combined + revoked-only + adds-only adaptive charts, raw per-day table, top revoked entitlements/identities, source breakdown | HTML |
 | Weekly Digest | `Invoke-SPWeeklyDigest.ps1` | Governance leadership | Weekly | Campaign activity, health, risk, reviewer performance, remediation | HTML, JSON |
 | Leadership Distribution | `Invoke-SPReportDistribution.ps1` | Per-leader delivery | After campaigns | Band-filtered reports, optionally emailed via SMTP | HTML |
 | Adaptive Composable | `Invoke-SPAdaptiveReport.ps1` | Presentation, analysis | On-demand | KPI cards, heatmap, top-N bars, drill-down tree, group table | HTML |
@@ -308,7 +310,7 @@ for fast, accurate reporting without ISC API calls. Target execution: <30 second
 |---|---|
 | **1. Entitlement State Summary** | KPI tiles: Approved / Revoked / Pending / Undecided with percentages |
 | **1b. Privileged Access Summary** | Privileged KPIs: total, approved, revoked, exposure (pending+undecided). Per-source breakdown (AD, AWS, ServiceNow, SAP) with decided % per source |
-| **2. Newly Decided** | Entitlements with PENDING/UNDECIDED -> decision transition in the date window |
+| **2. Newly Decided** | Entitlements with PENDING/UNDECIDED -> decision transition in the date window. Includes the **Re-Approved After Revoke** sub-table: observed REVOKE -> APPROVE re-grants in the window, with the revocation day mined from each record's state log |
 | **3. Chronically Unreviewed** | Items with consecutive undecided campaigns >= threshold (default 5) |
 | **4. Dropped from Scope** | Entitlements no longer in any active campaign |
 | **5. Reviewer Engagement Summary** | Engagement score table + KPI tiles |
@@ -377,12 +379,19 @@ daily evidence HTML reports.
 .\Scripts\Invoke-SPPendingReviewerScrape.ps1 -FilePattern 'daily-evidence-v4e-*.html'
 ```
 
+The default `-FilePattern` matches the production V4b output (`daily-evidence-v4b-*.html`)
+plus the legacy/mock name (`Daily-Attestation-Evidence-Report-*.html`); pass one or more
+patterns to override. Streaks count consecutive REPORT days, so weekends and holidays with
+no report do not reset a run; a completed day does. Reviewer names are resolved from each
+table's header row (V4d-style item tables fall back to their subhead names), and
+placeholder rows (`N/A`, "No undecided reviewers.", V4e empty-state rows) are filtered.
+
 ### Auto-MinMisses
 
-| Campaigns Found | Default MinMisses |
+| Report Days Found | Default MinMisses |
 |---|---|
-| 1-3 | 1 (show all) |
-| 4+ | 3 (focus on chronic) |
+| 1-5 | 1 (show all) |
+| 6+ | 3 (focus on chronic) |
 
 ### Gaming pattern detection (> 5 campaigns)
 
@@ -396,6 +405,53 @@ daily evidence HTML reports.
 
 Each reviewer gets a composite gaming score (0-100) and risk label:
 Monitor (<30), Concerning (30-59), High Risk (60+).
+
+---
+
+## Decision Activity Tracker (Scraper)
+
+Summarizes revoked and newly approved access decisions by scraping the same daily
+evidence HTML reports. Like the Pending Reviewer Tracker it is read-only and
+dependency-free: no ISC API, no cache.
+
+### Critical semantics: cumulative snapshots and decision dates
+
+The V4b registers are CUMULATIVE campaign snapshots -- every daily report re-lists all
+revocations and new-scope approvals made so far, and each row carries the item's own
+Decision Date. The scraper therefore:
+
+- **De-duplicates** items across the window (identity + access + source + reviewer +
+  decision date; first sighting wins). Without this, a 30-day window counted every
+  revocation once per day it survived in the register.
+- **Buckets by each item's own Decision Date**, not the report file's date -- a June 25
+  report contributes decisions to June 8-24 buckets if that is when they were decided.
+  The decision-day window can therefore start before the first report file.
+- **Scrapes the approved campaign-to-date total** from the campaign summary table when
+  present (latest snapshot plus growth across the window).
+
+### Running the tracker
+
+```powershell
+# Default limits (500 detail rows, 15 ranking rows)
+.\Scripts\Invoke-SPDecisionScrape.ps1 -Path .\Audit\daily-evidence -DaysBack 30
+
+# Explicit window and larger detail registers
+.\Scripts\Invoke-SPDecisionScrape.ps1 -Since '2026-07-01' -Until '2026-07-31' -Top 2000
+```
+
+### Dashboard contents
+
+| Section | Content |
+|---|---|
+| **Decision Activity Summary** | KPI tiles: distinct revoked, distinct new scope, approved campaign-to-date (when scrapeable), net change, report days, decision days, per-decision-day averages |
+| **Daily Decision Trend** | Three adaptive charts on one aligned date axis -- combined paired red/green, revoked-only, new-scope-only -- plus a raw per-day numbers table. Bar width and date-label density adapt to the window (15-90+ days); labels rotate below the axis |
+| **Revoked Access Register** | Collapsible detail (capped at 500 rows by default; `-Top` overrides, truncation disclosed) |
+| **Top Revoked Entitlements / Identities** | Risk concentration rankings |
+| **New Scope Detail** | Collapsible register of truly new approved access |
+| **Source Breakdown** | Revoked vs new scope per source system |
+
+Note: "Newly Decided" approvals of pre-existing items are intentionally excluded from
+New Scope and Net Change -- that signal belongs to the V4g/V8 state pipeline.
 
 ---
 

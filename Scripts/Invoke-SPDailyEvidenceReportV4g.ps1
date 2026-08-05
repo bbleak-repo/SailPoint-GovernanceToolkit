@@ -674,6 +674,22 @@ try {
         $todaySnap = $audit['TodaySnapshot']
         if ($null -eq $todaySnap) { continue }
         $others = @($snapSet | Where-Object { [string]$_.Meta.CampaignId -ne [string]$audit['CampaignId'] })
+        # Guard: only diff against snapshots of campaigns that STARTED BEFORE this one.
+        # When a run's fetch window contains both today's and yesterday's instances,
+        # yesterday's audit used to diff against TODAY's snapshot (saved moments earlier
+        # in Pass 1) -- a backwards comparison whose Added items polluted the New Scope
+        # list. Snapshots with unparseable dates are kept (old behavior) rather than
+        # silently dropped.
+        $curStart = $null
+        $curStartRaw = [string]$audit['Created']
+        if (-not [string]::IsNullOrWhiteSpace($curStartRaw)) { try { $curStart = [datetime]$curStartRaw } catch { $curStart = $null } }
+        if ($null -ne $curStart) {
+            $others = @($others | Where-Object {
+                $d = [string]$_.Meta.StartDate; if ([string]::IsNullOrWhiteSpace($d)) { $d = [string]$_.Meta.CapturedAt }
+                $dt = $null; try { $dt = [datetime]$d } catch { }
+                ($null -eq $dt) -or ($dt -lt $curStart)
+            })
+        }
         if ($others.Count -eq 0) { continue }
         $priorSnap = @($others | Sort-Object @{ Expression = {
             $d = [string]$_.Meta.StartDate; if ([string]::IsNullOrWhiteSpace($d)) { $d = [string]$_.Meta.CapturedAt }
@@ -724,53 +740,20 @@ try {
             }
         }
 
-        # NewlyDecided: PENDING in prior → APPROVE/REVOKE in current.
-        # DISABLED for daily recurring campaigns (same scope re-reviewed each day).
-        # For recurring campaigns, PENDING→APPROVE is always a timing artifact:
-        #   - Pre-sign-off: ISC shows items as PENDING even if reviewer clicked approve
-        #   - Auto-closed: idNowAutoApproved items are PENDING but were never truly undecided
-        #   - Reviewer absence: one-day gap doesn't mean items were never reviewed
-        # The V7 Reviewer Compliance Accountability section handles genuine accountability.
-        # NewlyDecided only renders for non-recurring campaigns (mixed types/scopes).
-        $campStatus = ([string]$audit['Status']).ToUpperInvariant()
-        # Recurrence detection via the shared series key (Get-SPCampaignSeriesKey), not
-        # the old +/-10% item-count heuristic -- a daily series whose scope grows past
-        # 10% is still the same recurring series, and misclassifying it re-enables the
-        # PENDING->APPROVE timing artifact the comment above describes.
-        $isRecurring = $false
-        if ($campaignAudits.Count -gt 1 -and (Get-Command Get-SPCampaignSeriesKey -ErrorAction Ignore)) {
-            $thisStemR = ''
-            $kr = Get-SPCampaignSeriesKey -Name ([string]$audit['CampaignName'])
-            if ($kr.Success) { $thisStemR = [string]$kr.Data.NormalizedStem }
-            if (-not [string]::IsNullOrWhiteSpace($thisStemR)) {
-                $sameStem = 0
-                foreach ($other in $campaignAudits) {
-                    $okr = Get-SPCampaignSeriesKey -Name ([string]$other['CampaignName'])
-                    if ($okr.Success -and ([string]$okr.Data.NormalizedStem) -eq $thisStemR) { $sameStem++ }
-                }
-                $isRecurring = ($sameStem -gt 1)
-            }
-        }
-        if (-not $isRecurring -and $campStatus -notin @('COMPLETED', 'COMPLETING')) {
-            foreach ($nd in @($diff.Scope.NewlyDecided)) {
-                $ndKey = [string](Get-V4Prop $nd 'Key' '')
-                if (-not [string]::IsNullOrWhiteSpace($ndKey) -and $v4SeenKeys.ContainsKey($ndKey)) { continue }
-                $ndDec = [string](Get-V4Prop $nd 'CurrDecision' '')
-                if ($ndDec -eq 'APPROVE' -or $ndDec -eq 'Approved') {
-                    $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
-                    if ([string]::IsNullOrWhiteSpace($ndDate)) {
-                        $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
-                    }
-                    $v4NewlyDecided.Add($nd)
-                    if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
-                }
-            }
-        }
+        # Legacy diff-based NewlyDecided is NOT collected in V4g. The persistent
+        # entitlement state DB (State Tracking region) is the single authority for
+        # newly-decided detection -- observed PENDING/UNDECIDED -> decided transitions
+        # only -- and the HTML renders from it. The old two-campaign PENDING->APPROVE
+        # diff re-flagged routine catch-up approvals whenever the run held a single
+        # campaign instance (every recurrence heuristic read one instance as "not
+        # recurring"), which is exactly the daily-attestation case. $v4NewlyDecided
+        # stays as an (empty) list so the daily-metrics diff schema keeps its
+        # newlyDecidedCount field without a special case.
     }
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $stepResults['ScopeDiff'] = @{ Status = 'Success'; Detail = "new-scope=$($v4NewlyApproved.Count) newly-decided=$($v4NewlyDecided.Count) hasPrior=$v4HasPrior"; Duration = [math]::Round($stepDuration, 2) }
-    Write-Host "  Step 1b: new-scope=$($v4NewlyApproved.Count) newly-decided=$($v4NewlyDecided.Count) hasPrior=$v4HasPrior" -ForegroundColor Green
+    $stepResults['ScopeDiff'] = @{ Status = 'Success'; Detail = "new-scope=$($v4NewlyApproved.Count) hasPrior=$v4HasPrior (newly-decided: state DB, see State Tracking)"; Duration = [math]::Round($stepDuration, 2) }
+    Write-Host "  Step 1b: new-scope=$($v4NewlyApproved.Count) hasPrior=$v4HasPrior (newly-decided comes from the state DB)" -ForegroundColor Green
 }
 catch {
     Write-Host "  Step 1b: ERROR - $($_.Exception.Message)" -ForegroundColor Red
@@ -1015,6 +998,8 @@ try {
             }
         }
         $diffData.newlyApprovedCount = $v4NewlyApproved.Count
+        # Always 0 in V4g: the legacy diff-based NewlyDecided is not collected (the
+        # entitlement state DB owns newly-decided; see the State Tracking region).
         $diffData.newlyDecidedCount = $v4NewlyDecided.Count
 
         $metricsRecord = [ordered]@{
@@ -1084,7 +1069,7 @@ try {
     $priorStateSnapshot = $tracking.Entitlement.PriorSnapshot
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $eTag = "ent=$($tracking.Entitlement.Total)(+$($tracking.Entitlement.StateNew) new, $($tracking.Entitlement.StateChanged) changed, $($tracking.Entitlement.NewlyDecided.Count) decided)"
+    $eTag = "ent=$($tracking.Entitlement.Total)(+$($tracking.Entitlement.StateNew) new, $($tracking.Entitlement.StateChanged) changed, $($tracking.Entitlement.NewlyDecided.Count) decided, $($tracking.Entitlement.ReApproved.Count) re-approved)"
     $rTag = "rev=$($tracking.Reviewer.Total)(+$($tracking.Reviewer.ReviewersNew) new, $($tracking.Reviewer.ReviewersUpdated) updated)"
     $stepResults['StateTracking'] = @{ Status = 'Success'; Detail = "$eTag | $rTag"; Duration = [math]::Round($stepDuration, 2) }
     Write-Host "    $eTag" -ForegroundColor Green
@@ -1100,7 +1085,7 @@ catch {
 # Null-safe defaults for HTML sections
 if ($null -eq $tracking) {
     $tracking = @{
-        Entitlement = @{ NewlyDecided = @(); DroppedFromScope = @(); StateSummary = @{ APPROVE=0; REVOKE=0; PENDING=0; UNDECIDED=0 }; Total=0; StateNew=0; StateChanged=0; PriorSnapshot=@{} }
+        Entitlement = @{ NewlyDecided = @(); ReApproved = @(); DroppedFromScope = @(); StateSummary = @{ APPROVE=0; REVOKE=0; PENDING=0; UNDECIDED=0 }; Total=0; StateNew=0; StateChanged=0; PriorSnapshot=@{} }
         Reviewer    = @{ ReviewerMap = @{}; Total=0; ReviewersNew=0; ReviewersUpdated=0; SeriesDetected=@{} }
     }
 }
@@ -2135,26 +2120,49 @@ $ndLabel = "Newly Decided -- Genuine State Changes ($ndCnt items)"
 if ([bool]$tracking.Entitlement.IsFirstRun) { $ndLabel = "Newly Decided ($ndCnt items) -- first run, no prior state for comparison" }
 [void]$sb.AppendLine("<details><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$ndLabel</summary>")
 [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items that were PENDING or UNDECIDED in the entitlement state database and are now genuinely APPROVED or REVOKED. Sourced from the persistent entitlement state database -- not subject to ISC auto-approve/timing artifacts.</p>')
-[void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Previous State</th><th>Current State</th><th>State Changed</th><th>Privileged</th></tr></thead><tbody>')
-if ($ndCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="8" style="color:#777;font-style:italic">None.</td></tr>') }
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Previous State</th><th>Current State</th><th>Decision Date</th></tr></thead><tbody>')
+if ($ndCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="7" style="color:#777;font-style:italic">None.</td></tr>') }
 else {
+    # Field names match the Update-SPEntitlementState NewlyDecided entry contract
+    # (PriorState/NewState/DecisionDate/ReviewerName). The previous render read
+    # lastStateFrom/currentDecision/lastStateChange/currentReviewer -- keys that do
+    # not exist on the entries -- so those columns were silently blank. The
+    # Privileged column is dropped: state records never populate isPrivileged, and
+    # an always-empty cell reads as "not privileged", which is not known here.
     $ndSorted = @($tracking.Entitlement.NewlyDecided | Sort-Object @{ Expression = {
-        $d = [string]$_.lastStateChange
+        $d = [string]$_.DecisionDate
         if ([string]::IsNullOrWhiteSpace($d)) { [datetime]::MinValue } else { try { [datetime]::Parse($d) } catch { [datetime]::MinValue } }
     } } -Descending)
     foreach ($nd in $ndSorted) {
-        $ndIdent    = ConvertTo-SafeHtml ([string]$nd.identityName)
-        $ndAccess   = ConvertTo-SafeHtml ([string]$nd.accessName)
-        $ndSource   = ConvertTo-SafeHtml ([string]$nd.sourceName)
-        $ndReview   = ConvertTo-SafeHtml ([string]$nd.currentReviewer)
-        $ndPrior    = ConvertTo-SafeHtml ([string]$nd.lastStateFrom)
-        $ndCurrent  = ConvertTo-SafeHtml ([string]$nd.currentDecision)
-        $ndChanged  = ConvertTo-SafeHtml ([string]$nd.lastStateChange)
-        $ndPriv     = $false; try { $ndPriv = [bool]$nd.privileged } catch { }
-        $ndPrivBadge = if ($ndPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
-        $ndCurrCls  = switch ([string]$nd.currentDecision) { 'APPROVE' { 's-green' } 'REVOKE' { 's-red' } default { 's-amber' } }
-        $ndPriorCls = switch ([string]$nd.lastStateFrom) { 'PENDING' { 's-amber' } 'UNDECIDED' { 's-red' } default { 's-gray' } }
-        [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td class="' + $ndPriorCls + '">' + $ndPrior + '</td><td class="' + $ndCurrCls + '">' + $ndCurrent + '</td><td>' + $ndChanged + '</td><td>' + $ndPrivBadge + '</td></tr>')
+        $ndIdent    = ConvertTo-SafeHtml ([string]$nd.IdentityName)
+        $ndAccess   = ConvertTo-SafeHtml ([string]$nd.AccessName)
+        $ndSource   = ConvertTo-SafeHtml ([string]$nd.SourceName)
+        $ndReview   = ConvertTo-SafeHtml ([string]$nd.ReviewerName)
+        $ndPrior    = ConvertTo-SafeHtml ([string]$nd.PriorState)
+        $ndCurrent  = ConvertTo-SafeHtml ([string]$nd.NewState)
+        $ndChanged  = ConvertTo-SafeHtml ([string]$nd.DecisionDate)
+        $ndCurrCls  = switch ([string]$nd.NewState) { 'APPROVE' { 's-green' } 'REVOKE' { 's-red' } default { 's-amber' } }
+        $ndPriorCls = switch ([string]$nd.PriorState) { 'PENDING' { 's-amber' } 'UNDECIDED' { 's-red' } default { 's-gray' } }
+        [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td class="' + $ndPriorCls + '">' + $ndPrior + '</td><td class="' + $ndCurrCls + '">' + $ndCurrent + '</td><td>' + $ndChanged + '</td></tr>')
+    }
+}
+[void]$sb.AppendLine('</tbody></table></details>')
+
+# -- Re-Approved After Revoke: from the entitlement state database --
+# The primary re-grant governance signal: access genuinely REVOKED in an earlier
+# instance and genuinely RE-APPROVED later. Routine first decisions never land here.
+$raCnt = $tracking.Entitlement.ReApproved.Count
+[void]$sb.AppendLine("<details><summary class='s-amber' style='font-size:13px;margin:12px 0 6px'>Re-Approved After Revoke ($raCnt items)</summary>")
+[void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Access that was genuinely REVOKED in an earlier campaign instance and has since been genuinely RE-APPROVED. Sourced from the persistent entitlement state database; auto-approve artifacts are excluded by the honest classifier.</p>')
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Re-Approved By</th><th>Revoked On</th><th>Re-Approved On</th></tr></thead><tbody>')
+if ($raCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
+else {
+    $raSorted = @($tracking.Entitlement.ReApproved | Sort-Object @{ Expression = {
+        $d = [string]$_.ReApprovedDate
+        if ([string]::IsNullOrWhiteSpace($d)) { [datetime]::MinValue } else { try { [datetime]::Parse($d) } catch { [datetime]::MinValue } }
+    } } -Descending)
+    foreach ($ra in $raSorted) {
+        [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml ([string]$ra.IdentityName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$ra.AccessName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$ra.SourceName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$ra.ReviewerName)) + '</td><td class="s-red">' + (ConvertTo-SafeHtml ([string]$ra.RevokedDate)) + '</td><td class="s-green">' + (ConvertTo-SafeHtml ([string]$ra.ReApprovedDate)) + '</td></tr>')
     }
 }
 [void]$sb.AppendLine('</tbody></table></details>')

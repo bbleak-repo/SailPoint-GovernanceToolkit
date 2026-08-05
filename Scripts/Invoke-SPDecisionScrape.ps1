@@ -5,15 +5,26 @@
     Revoked and Newly Approved (New Scope) access decisions across the reporting period.
 
 .DESCRIPTION
-    Reads the "final" daily evidence HTML reports you already produce -- by default named
-    Daily-Attestation-Evidence-Report-<date>.html, where <date> is auto-parsed from the
+    Reads the "final" daily evidence HTML reports you already produce -- by default matching
+    the production V4b output name daily-evidence-v4b-<stamp>.html plus the legacy/mock name
+    Daily-Attestation-Evidence-Report-<date>.html, with the report date auto-parsed from the
     filename (falling back to the file's LastWriteTime). For each report it finds every
     collapsible whose <summary> mentions "Revoked" (with class s-red) and "New Scope" or
     "Approved Access" (with class s-green), and extracts decision details from the tables.
 
+    IMPORTANT SEMANTICS: the V4b registers are CUMULATIVE campaign snapshots -- every daily
+    report re-lists all revocations/new-scope approvals made so far, and each row carries the
+    item's own Decision Date. Items are therefore DE-DUPLICATED across the window (first
+    sighting wins) and bucketed by their own Decision Date, falling back to the first report
+    day that listed them. Without this, a 30-day window counted every item once per day it
+    survived in and put decisions on the report-file date instead of the real decision date.
+
     It then renders a self-contained HTML dashboard (inline SVG, no JavaScript -- Word/email safe):
-      1. Decision Activity Summary -- KPI tiles (total revoked, new scope, net change, averages).
-      2. Daily Decision Trend     -- paired red/green bars per report day.
+      1. Decision Activity Summary -- KPI tiles (total revoked, new scope, approved campaign-to-date
+         when the campaign summary table is present, net change, averages).
+      2. Daily Decision Trend     -- combined paired red/green bars per DECISION day, plus
+         revoked-only and new-scope-only charts and a raw per-day numbers table. Charts adapt
+         bar width and date-label density to the window length (15-90+ days).
       3. Revoked Access Detail    -- full register of every revocation (collapsible).
       4. Top Revoked Entitlements -- which entitlements were revoked most often.
       5. Top Revoked Identities   -- which identities had the most revocations.
@@ -26,7 +37,8 @@
     Folder containing the daily evidence HTML reports. Default: .\Audit\daily-evidence.
 
 .PARAMETER FilePattern
-    Wildcard for the report files. Default: 'Daily-Attestation-Evidence-Report-*.html'.
+    One or more wildcards for the report files. Default matches the production V4b output
+    ('daily-evidence-v4b-*.html') plus the legacy/mock name ('Daily-Attestation-Evidence-Report-*.html').
 
 .PARAMETER DaysBack
     Number of report DAYS to include (not calendar days). If the folder has reports for
@@ -46,7 +58,9 @@
     Console | HTML | Both (default). Console prints the summary; HTML writes the dashboard.
 
 .PARAMETER Top
-    Limit detail tables and rankings to the Top N rows (0 = default limits). Default 0.
+    Limit detail tables and rankings to the Top N rows. Default 0 = built-in limits
+    (500 rows per detail register, 15 rows per ranking table). A real report day can carry
+    thousands of rows, and an unbounded register breaks the Word/email-safe output goal.
 
 .PARAMETER Help
     Show detailed help.
@@ -60,14 +74,14 @@
 [CmdletBinding()]
 param(
     [Parameter()][string]$Path = '.\Audit\daily-evidence',
-    [Parameter()][string]$FilePattern = 'Daily-Attestation-Evidence-Report-*.html',
+    [Parameter()][string[]]$FilePattern = @('daily-evidence-v4b-*.html', 'Daily-Attestation-Evidence-Report-*.html'),
     [Parameter()][int]$DaysBack = 0,
     [Parameter()][string]$Since,
     [Parameter()][string]$Until,
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'HTML', 'Both')][string]$OutputMode = 'Both',
     [Parameter()][int]$Top = 0,
-    [Parameter()][Alias('?')][switch]$Help
+    [Parameter()][switch]$Help
 )
 
 Set-StrictMode -Version 1
@@ -99,15 +113,18 @@ function Resolve-ReportDate {
     foreach ($f in $fmts) {
         $dt = [datetime]::MinValue
         if ([datetime]::TryParseExact($token, $f, $inv, [System.Globalization.DateTimeStyles]::None, [ref]$dt)) {
-            return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd') }
+            return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd'); Fallback = $false }
         }
     }
     $m = [regex]::Match($token, '\d{4}[-.]?\d{2}[-.]?\d{2}')
     if ($m.Success) {
         $dt = [datetime]::MinValue
-        if ([datetime]::TryParse($m.Value, [ref]$dt)) { return @{ Date = $dt; Label = $dt.ToString('yyyy-MM-dd') } }
+        if ([datetime]::TryParse($m.Value, [ref]$dt)) { return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd'); Fallback = $false } }
     }
-    return @{ Date = $File.LastWriteTime.Date; Label = $File.LastWriteTime.ToString('yyyy-MM-dd') + '*' }
+    # Fallback: date the file by its LastWriteTime. The label stays the plain date -- a
+    # starred label here split one calendar day into two aggregation keys whenever a
+    # same-day file failed filename parsing. Fallback provenance goes in the meta line.
+    return @{ Date = $File.LastWriteTime.Date; Label = $File.LastWriteTime.ToString('yyyy-MM-dd'); Fallback = $true }
 }
 
 function Get-RevokedItems {
@@ -142,6 +159,7 @@ function Get-RevokedItems {
                 $accessName    = Remove-HtmlTags $cells[2].Groups[1].Value
                 $source        = Remove-HtmlTags $cells[3].Groups[1].Value
                 $reviewer      = Remove-HtmlTags $cells[4].Groups[1].Value
+                $decisionDate  = if ($cells.Count -ge 6) { Remove-HtmlTags $cells[5].Groups[1].Value } else { '' }
                 $justification = if ($cells.Count -ge 7) { Remove-HtmlTags $cells[6].Groups[1].Value } else { '' }
                 if ([string]::IsNullOrWhiteSpace($identity)) { continue }
                 $items.Add([pscustomobject]@{
@@ -149,6 +167,7 @@ function Get-RevokedItems {
                     AccessName    = $accessName
                     Source        = $source
                     Reviewer      = $reviewer
+                    DecisionDate  = $decisionDate
                     Justification = $justification
                 })
             }
@@ -183,16 +202,18 @@ function Get-NewScopeItems {
                 if ($row.Groups[1].Value -match '<th\b') { continue }
                 # V4b columns: 0=Identity, 1=AccessName, 2=Source, 3=Reviewer, 4=DecisionDate
                 if ($cells.Count -lt 4) { continue }
-                $identity   = Remove-HtmlTags $cells[0].Groups[1].Value
-                $accessName = Remove-HtmlTags $cells[1].Groups[1].Value
-                $source     = Remove-HtmlTags $cells[2].Groups[1].Value
-                $reviewer   = Remove-HtmlTags $cells[3].Groups[1].Value
+                $identity     = Remove-HtmlTags $cells[0].Groups[1].Value
+                $accessName   = Remove-HtmlTags $cells[1].Groups[1].Value
+                $source       = Remove-HtmlTags $cells[2].Groups[1].Value
+                $reviewer     = Remove-HtmlTags $cells[3].Groups[1].Value
+                $decisionDate = if ($cells.Count -ge 5) { Remove-HtmlTags $cells[4].Groups[1].Value } else { '' }
                 if ([string]::IsNullOrWhiteSpace($identity)) { continue }
                 $items.Add([pscustomobject]@{
-                    Identity   = $identity
-                    AccessName = $accessName
-                    Source     = $source
-                    Reviewer   = $reviewer
+                    Identity     = $identity
+                    AccessName   = $accessName
+                    Source       = $source
+                    Reviewer     = $reviewer
+                    DecisionDate = $decisionDate
                 })
             }
         }
@@ -200,45 +221,135 @@ function Get-NewScopeItems {
     return ,$items.ToArray()
 }
 
+function Resolve-DecisionDay {
+    # Prefer the register's own Decision Date cell (real decision timestamps, e.g.
+    # '2026-06-24 13:00'); fall back to the report day for '-'/'N/A'/unparseable cells.
+    param([string]$RawDecisionDate, [datetime]$ReportDate)
+    if (-not [string]::IsNullOrWhiteSpace($RawDecisionDate)) {
+        $tmp = [datetime]::MinValue
+        if ([datetime]::TryParse($RawDecisionDate, [ref]$tmp)) { return $tmp.Date }
+    }
+    return $ReportDate.Date
+}
+
+function Get-ApprovedTotal {
+    # Best-effort: sum the Approved column of the V4b campaign summary table
+    # (Campaign | Status | Total Items | Approved | Revoked | Undecided | ...).
+    # The value is a CAMPAIGN-TO-DATE level, not a daily increment. Returns -1 when the
+    # table is absent (e.g. non-V4b input) so callers can hide the KPI gracefully.
+    param([string]$Html)
+    foreach ($tbl in [regex]::Matches($Html, '<table\b[^>]*>(.*?)</table>', 'Singleline')) {
+        $t = $tbl.Groups[1].Value
+        $ths = @([regex]::Matches($t, '<th\b[^>]*>(.*?)</th>', 'Singleline') | ForEach-Object { Remove-HtmlTags $_.Groups[1].Value })
+        if ($ths.Count -eq 0) { continue }
+        if (($ths -join '|') -notmatch '(?i)campaign') { continue }
+        $apIdx = -1
+        for ($i = 0; $i -lt $ths.Count; $i++) { if ($ths[$i] -match '(?i)^approved$') { $apIdx = $i; break } }
+        if ($apIdx -lt 0) { continue }
+        $sum = 0; $found = $false
+        foreach ($row in [regex]::Matches($t, '<tr\b[^>]*>(.*?)</tr>', 'Singleline')) {
+            if ($row.Groups[1].Value -match '<th\b') { continue }
+            $cells = [regex]::Matches($row.Groups[1].Value, '<t[dh]\b[^>]*>(.*?)</t[dh]>', 'Singleline')
+            if ($cells.Count -le $apIdx) { continue }
+            $txt = (Remove-HtmlTags $cells[$apIdx].Groups[1].Value) -replace '[,\s]', ''
+            $n = 0
+            if ([int]::TryParse($txt, [ref]$n)) { $sum += $n; $found = $true }
+        }
+        if ($found) { return $sum }
+    }
+    return -1
+}
+
 # ---------------------------------------------------------------------------
-# SVG chart builders (no JS -- Word/email safe)
+# SVG chart builders (no JS -- Word/email safe).
+# Shared adaptive rules so 15-90+ day windows stay readable:
+#  - bar width shrinks as the day count grows
+#  - date labels are thinned to ~30 and rotated BELOW the axis, anchored at their top
+#    end so they slope down-left AWAY from the bars (the previous start-anchored
+#    rotate(-60) sloped them up INTO the bars)
+#  - per-bar value labels render only when bars are wide enough to hold them; the raw
+#    daily numbers table carries the exact counts either way
 # ---------------------------------------------------------------------------
+function Get-SvgDateLabelStep {
+    # At most ~30 date labels regardless of window length; the last bar always gets one.
+    param([int]$Count)
+    return [int][math]::Ceiling($Count / 30.0)
+}
+
+function New-SvgDailySeries {
+    # Single-series daily bar chart (used for the revoked-only and new-scope-only views).
+    param($Dates, $Counts, [string]$Fill = '#2c7fb8')
+    if ($Dates.Count -eq 0) { return '<p style="color:#777">No dates to trend.</p>' }
+    $n = $Dates.Count
+    $barW = if ($n -le 20) { 26 } elseif ($n -le 45) { 14 } else { 9 }
+    $gap  = if ($n -le 20) { 8 }  elseif ($n -le 45) { 5 }  else { 3 }
+    $chartH = 160; $labelH = 64; $topPad = 14; $leftPad = 40
+    $step = Get-SvgDateLabelStep -Count $n
+    $max = ([int](@($Counts | Measure-Object -Maximum).Maximum)); if ($max -lt 1) { $max = 1 }
+    $w = $leftPad + ($n * ($barW + $gap)) + 20
+    $h = $topPad + $chartH + $labelH
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("<svg width='$w' height='$h' xmlns='http://www.w3.org/2000/svg' font-family='Segoe UI,Arial,sans-serif' font-size='10'>")
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = $leftPad + ($i * ($barW + $gap))
+        $bh = [int]($chartH * ($Counts[$i] / $max))
+        $yTop = $topPad + $chartH - $bh
+        [void]$sb.Append("<rect x='$x' y='$yTop' width='$barW' height='$bh' rx='2' fill='$Fill'><title>$(ConvertTo-Safe $Dates[$i]): $($Counts[$i])</title></rect>")
+        if ($barW -ge 14 -and $Counts[$i] -gt 0) {
+            [void]$sb.Append("<text x='$($x + $barW/2)' y='$($yTop - 3)' text-anchor='middle' fill='#222'>$($Counts[$i])</text>")
+        }
+        if (($i % $step) -eq 0 -or $i -eq ($n - 1)) {
+            $lx = $x + ($barW / 2); $ly = $topPad + $chartH + 12
+            [void]$sb.Append("<text x='$lx' y='$ly' text-anchor='end' transform='rotate(-60 $lx,$ly)' fill='#555'>$(ConvertTo-Safe $Dates[$i])</text>")
+        }
+    }
+    [void]$sb.Append('</svg>')
+    return $sb.ToString()
+}
+
 function New-SvgDailyDecisionTrend {
+    # Combined view: paired red (revoked) / green (new scope) bars per decision day.
     param($Dates, $RevokedCounts, $NewScopeCounts)
     if ($Dates.Count -eq 0) { return '<p style="color:#777">No dates to trend.</p>' }
-    $barW = 12; $pairGap = 4; $groupGap = 10; $chartH = 160; $labelH = 60
+    $n = $Dates.Count
+    $barW = if ($n -le 20) { 12 } elseif ($n -le 45) { 8 } else { 5 }
+    $pairGap  = if ($n -le 20) { 4 }  elseif ($n -le 45) { 3 } else { 2 }
+    $groupGap = if ($n -le 20) { 10 } elseif ($n -le 45) { 6 } else { 4 }
+    $chartH = 160; $labelH = 64; $topPad = 16; $leftPad = 40
+    $step = Get-SvgDateLabelStep -Count $n
     $allCounts = @($RevokedCounts) + @($NewScopeCounts)
     $max = ([int](@($allCounts | Measure-Object -Maximum).Maximum)); if ($max -lt 1) { $max = 1 }
     $groupW = ($barW * 2) + $pairGap + $groupGap
-    $w = ($Dates.Count * $groupW) + 40
-    $h = $chartH + $labelH
+    $w = $leftPad + ($n * $groupW) + 20
+    $h = $topPad + $chartH + $labelH
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append("<svg width='$w' height='$h' xmlns='http://www.w3.org/2000/svg' font-family='Segoe UI,Arial,sans-serif' font-size='10'>")
-    for ($i = 0; $i -lt $Dates.Count; $i++) {
-        $gx = 30 + ($i * $groupW)
+    # Legend (top-left, inside the fixed padding so it never depends on chart width)
+    [void]$sb.Append("<rect x='$leftPad' y='1' width='9' height='9' rx='1' fill='#c0392b'/><text x='$($leftPad+13)' y='9' fill='#555'>Revoked</text>")
+    [void]$sb.Append("<rect x='$($leftPad+70)' y='1' width='9' height='9' rx='1' fill='#27ae60'/><text x='$($leftPad+84)' y='9' fill='#555'>New Scope</text>")
+    for ($i = 0; $i -lt $n; $i++) {
+        $gx = $leftPad + ($i * $groupW)
         # Revoked bar (red)
         $rh = [int]($chartH * ($RevokedCounts[$i] / $max))
-        $ryTop = $chartH - $rh
-        [void]$sb.Append("<rect x='$gx' y='$ryTop' width='$barW' height='$rh' rx='2' fill='#c0392b'/>")
-        if ($RevokedCounts[$i] -gt 0) {
+        $ryTop = $topPad + $chartH - $rh
+        [void]$sb.Append("<rect x='$gx' y='$ryTop' width='$barW' height='$rh' rx='2' fill='#c0392b'><title>$(ConvertTo-Safe $Dates[$i]) revoked: $($RevokedCounts[$i])</title></rect>")
+        if ($barW -ge 12 -and $RevokedCounts[$i] -gt 0) {
             [void]$sb.Append("<text x='$($gx + $barW/2)' y='$($ryTop - 2)' text-anchor='middle' fill='#c0392b' font-size='9'>$($RevokedCounts[$i])</text>")
         }
         # New scope bar (green)
         $nx = $gx + $barW + $pairGap
         $nh = [int]($chartH * ($NewScopeCounts[$i] / $max))
-        $nyTop = $chartH - $nh
-        [void]$sb.Append("<rect x='$nx' y='$nyTop' width='$barW' height='$nh' rx='2' fill='#27ae60'/>")
-        if ($NewScopeCounts[$i] -gt 0) {
+        $nyTop = $topPad + $chartH - $nh
+        [void]$sb.Append("<rect x='$nx' y='$nyTop' width='$barW' height='$nh' rx='2' fill='#27ae60'><title>$(ConvertTo-Safe $Dates[$i]) new scope: $($NewScopeCounts[$i])</title></rect>")
+        if ($barW -ge 12 -and $NewScopeCounts[$i] -gt 0) {
             [void]$sb.Append("<text x='$($nx + $barW/2)' y='$($nyTop - 2)' text-anchor='middle' fill='#27ae60' font-size='9'>$($NewScopeCounts[$i])</text>")
         }
-        # Date label
-        $lx = $gx + $barW + ($pairGap / 2)
-        [void]$sb.Append("<text x='$lx' y='$($chartH + 12)' transform='rotate(-60 $lx,$($chartH + 12))' fill='#555'>$(ConvertTo-Safe $Dates[$i])</text>")
+        # Date label (thinned, anchored at its top end below the axis)
+        if (($i % $step) -eq 0 -or $i -eq ($n - 1)) {
+            $lx = $gx + $barW + ($pairGap / 2); $ly = $topPad + $chartH + 12
+            [void]$sb.Append("<text x='$lx' y='$ly' text-anchor='end' transform='rotate(-60 $lx,$ly)' fill='#555'>$(ConvertTo-Safe $Dates[$i])</text>")
+        }
     }
-    # Legend
-    $legX = $w - 160
-    [void]$sb.Append("<rect x='$legX' y='2' width='10' height='10' rx='1' fill='#c0392b'/><text x='$($legX+14)' y='11' fill='#555'>Revoked</text>")
-    [void]$sb.Append("<rect x='$($legX+70)' y='2' width='10' height='10' rx='1' fill='#27ae60'/><text x='$($legX+84)' y='11' fill='#555'>New Scope</text>")
     [void]$sb.Append('</svg>')
     return $sb.ToString()
 }
@@ -247,32 +358,37 @@ function New-SvgDailyDecisionTrend {
 # Main
 # ---------------------------------------------------------------------------
 if (-not (Test-Path -LiteralPath $Path)) { Write-Host "ERROR: Path not found: $Path" -ForegroundColor Red; exit 2 }
-$files = @(Get-ChildItem -LiteralPath $Path -Filter $FilePattern -File | Sort-Object Name)
-if ($files.Count -eq 0) { Write-Host "No files matching '$FilePattern' in $Path" -ForegroundColor Yellow; exit 0 }
+$files = @(foreach ($pat in $FilePattern) { Get-ChildItem -LiteralPath $Path -Filter $pat -File }) |
+    Sort-Object -Property FullName -Unique
+$files = @($files | Sort-Object Name)
+if ($files.Count -eq 0) { Write-Host "No files matching '$($FilePattern -join "', '")' in $Path" -ForegroundColor Yellow; exit 0 }
+
+$sinceDt = $null; $untilDt = $null
+if ($Since) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Since, [ref]$tmp)) { $sinceDt = $tmp.Date } }
+if ($Until) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Until, [ref]$tmp)) { $untilDt = $tmp.Date } }
 
 # -DaysBack N: resolve from the actual report file dates (not calendar days).
+# Takes the N most recent unique report dates inside the -Until bound (it previously
+# ignored -Until, so DaysBack+Until returned fewer days than asked) and moves the
+# since-bound to the oldest of them. Overrides -Since when set.
 if ($DaysBack -gt 0) {
     $allFileDates = [System.Collections.Generic.List[datetime]]::new()
     foreach ($f in $files) {
         $d = Resolve-ReportDate -File $f
         if ($null -ne $d -and $d.Date -ne [datetime]::MinValue) {
+            if ($null -ne $untilDt -and $d.Date -gt $untilDt) { continue }
             if (-not $allFileDates.Contains($d.Date)) { $allFileDates.Add($d.Date) }
         }
     }
     $sortedDates = @($allFileDates | Sort-Object)
     if ($sortedDates.Count -gt $DaysBack) {
-        $cutoffDate = $sortedDates[$sortedDates.Count - $DaysBack]
-        $Since = $cutoffDate.ToString('yyyy-MM-dd')
-        Write-Host "  -DaysBack $DaysBack -> using $DaysBack most recent report days (since $Since)" -ForegroundColor DarkGray
+        $sinceDt = $sortedDates[$sortedDates.Count - $DaysBack]
+        Write-Host "  -DaysBack $DaysBack -> using $DaysBack most recent report days (since $($sinceDt.ToString('yyyy-MM-dd')))" -ForegroundColor DarkGray
     }
     else {
         Write-Host "  -DaysBack $DaysBack -> only $($sortedDates.Count) report day(s) available, using all" -ForegroundColor DarkGray
     }
 }
-
-$sinceDt = $null; $untilDt = $null
-if ($Since) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Since, [ref]$tmp)) { $sinceDt = $tmp.Date } }
-if ($Until) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Until, [ref]$tmp)) { $untilDt = $tmp.Date } }
 
 # Parse every report -> collect revoked and new scope items per date.
 $reports = New-Object System.Collections.Generic.List[object]
@@ -283,12 +399,15 @@ foreach ($f in $files) {
     $html = Get-Content -LiteralPath $f.FullName -Raw
     $revoked  = Get-RevokedItems  -Html $html
     $newScope = Get-NewScopeItems -Html $html
+    $approved = Get-ApprovedTotal -Html $html
     $reports.Add([pscustomobject]@{
-        File      = $f.Name
-        Date      = $d.Date
-        Label     = $d.Label
-        Revoked   = $revoked
-        NewScope  = $newScope
+        File          = $f.Name
+        Date          = $d.Date
+        Label         = $d.Label
+        Fallback      = [bool]$d.Fallback
+        Revoked       = $revoked
+        NewScope      = $newScope
+        ApprovedTotal = $approved
     })
 }
 $reports = @($reports | Sort-Object Date, Label)
@@ -297,47 +416,73 @@ if ($reports.Count -eq 0) { Write-Host "No reports in the requested date window.
 # Distinct report days
 $dateLabels = @($reports | ForEach-Object { $_.Label } | Sort-Object -Unique)
 $totalDays = $dateLabels.Count
+$fallbackFileCount = @($reports | Where-Object Fallback).Count
 
-# Flatten all items with date labels
+# ---------------------------------------------------------------------------
+# Dedupe + date attribution.
+# The V4b registers are CUMULATIVE campaign snapshots: every daily report re-lists all
+# revocations/new-scope approvals made so far, and each row carries the item's own
+# Decision Date. Summing rows across a multi-day window therefore counted every item
+# once per report day it survived in, and stamping rows with the report file's date put
+# decisions on the wrong day. Items are de-duplicated across reports (first sighting
+# wins) and bucketed by their own Decision Date, falling back to the first report day
+# that listed them.
+# ---------------------------------------------------------------------------
 $allRevoked  = New-Object System.Collections.Generic.List[object]
 $allNewScope = New-Object System.Collections.Generic.List[object]
-$dailyRevoked  = @{}
-$dailyNewScope = @{}
-foreach ($dl in $dateLabels) { $dailyRevoked[$dl] = 0; $dailyNewScope[$dl] = 0 }
+$seenRevoked  = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+$seenNewScope = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
 
 foreach ($rep in $reports) {
     foreach ($item in $rep.Revoked) {
+        $key = "$($item.Identity)|$($item.AccessName)|$($item.Source)|$($item.Reviewer)|$($item.DecisionDate)"
+        if (-not $seenRevoked.Add($key)) { continue }
         $allRevoked.Add([pscustomobject]@{
-            Date          = $rep.Label
+            Date          = (Resolve-DecisionDay -RawDecisionDate $item.DecisionDate -ReportDate $rep.Date).ToString('yyyy-MM-dd')
             Identity      = $item.Identity
             AccessName    = $item.AccessName
             Source        = $item.Source
             Reviewer      = $item.Reviewer
             Justification = $item.Justification
         })
-        $dailyRevoked[$rep.Label] = $dailyRevoked[$rep.Label] + 1
     }
     foreach ($item in $rep.NewScope) {
+        $key = "$($item.Identity)|$($item.AccessName)|$($item.Source)|$($item.Reviewer)|$($item.DecisionDate)"
+        if (-not $seenNewScope.Add($key)) { continue }
         $allNewScope.Add([pscustomobject]@{
-            Date       = $rep.Label
+            Date       = (Resolve-DecisionDay -RawDecisionDate $item.DecisionDate -ReportDate $rep.Date).ToString('yyyy-MM-dd')
             Identity   = $item.Identity
             AccessName = $item.AccessName
             Source     = $item.Source
             Reviewer   = $item.Reviewer
         })
-        $dailyNewScope[$rep.Label] = $dailyNewScope[$rep.Label] + 1
     }
 }
+
+# Daily activity buckets keyed by DECISION day (union across both series, sorted) so
+# the three charts and the raw-numbers table share one aligned date axis.
+$dailyRevoked  = @{}
+$dailyNewScope = @{}
+foreach ($it in $allRevoked)  { if (-not $dailyRevoked.ContainsKey($it.Date))  { $dailyRevoked[$it.Date]  = 0 }; $dailyRevoked[$it.Date]++ }
+foreach ($it in $allNewScope) { if (-not $dailyNewScope.ContainsKey($it.Date)) { $dailyNewScope[$it.Date] = 0 }; $dailyNewScope[$it.Date]++ }
+$activityLabels = @(@($dailyRevoked.Keys) + @($dailyNewScope.Keys) | Sort-Object -Unique)
+$activityDays = $activityLabels.Count
 
 $totalRevoked  = $allRevoked.Count
 $totalNewScope = $allNewScope.Count
 $netChange     = $totalRevoked - $totalNewScope
-$avgRevoked    = if ($totalDays -gt 0) { [math]::Round($totalRevoked / $totalDays, 1) } else { 0 }
-$avgNewScope   = if ($totalDays -gt 0) { [math]::Round($totalNewScope / $totalDays, 1) } else { 0 }
+$avgRevoked    = if ($activityDays -gt 0) { [math]::Round($totalRevoked / $activityDays, 1) } else { 0 }
+$avgNewScope   = if ($activityDays -gt 0) { [math]::Round($totalNewScope / $activityDays, 1) } else { 0 }
 
-# Build daily count arrays for the chart
-$revokedCounts  = @($dateLabels | ForEach-Object { $dailyRevoked[$_] })
-$newScopeCounts = @($dateLabels | ForEach-Object { $dailyNewScope[$_] })
+# Approved totals: campaign-to-date levels scraped per report (when the campaign summary
+# table is present). Latest snapshot + growth across the window; -1 = not available.
+$approvedSnapshots = @($reports | Where-Object { $_.ApprovedTotal -ge 0 })
+$approvedLatest = if ($approvedSnapshots.Count -gt 0) { [int]$approvedSnapshots[-1].ApprovedTotal } else { -1 }
+$approvedDelta  = if ($approvedSnapshots.Count -ge 2) { [int]$approvedSnapshots[-1].ApprovedTotal - [int]$approvedSnapshots[0].ApprovedTotal } else { $null }
+
+# Build daily count arrays for the charts (shared axis)
+$revokedCounts  = @($activityLabels | ForEach-Object { if ($dailyRevoked.ContainsKey($_))  { $dailyRevoked[$_] }  else { 0 } })
+$newScopeCounts = @($activityLabels | ForEach-Object { if ($dailyNewScope.ContainsKey($_)) { $dailyNewScope[$_] } else { 0 } })
 
 # Top Revoked Entitlements (group by AccessName)
 $entitlementGroups = @{}
@@ -418,8 +563,14 @@ $sourceRows = @($sourceGroups.GetEnumerator() | ForEach-Object {
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host ''
     Write-Host "Decision Activity Scrape: $totalDays day(s) from $($reports.Count) report(s) [$($reports[0].Label) .. $($reports[-1].Label)]" -ForegroundColor Cyan
-    Write-Host "  Revoked:    $totalRevoked items (avg ${avgRevoked}/day)" -ForegroundColor Red
-    Write-Host "  New Scope:  $totalNewScope items (avg ${avgNewScope}/day)" -ForegroundColor Green
+    if ($fallbackFileCount -gt 0) { Write-Host "  NOTE: $fallbackFileCount file(s) dated by file-modified time (filename date not parseable)" -ForegroundColor Yellow }
+    Write-Host "  Decision activity spans $activityDays decision day(s) (deduped across cumulative daily snapshots, dated by Decision Date)" -ForegroundColor DarkGray
+    Write-Host "  Revoked:    $totalRevoked distinct items (avg ${avgRevoked}/decision day)" -ForegroundColor Red
+    Write-Host "  New Scope:  $totalNewScope distinct items (avg ${avgNewScope}/decision day)" -ForegroundColor Green
+    if ($approvedLatest -ge 0) {
+        $apDeltaTxt = if ($null -ne $approvedDelta) { " ($(if ($approvedDelta -ge 0) { "+$approvedDelta" } else { $approvedDelta }) across the window)" } else { '' }
+        Write-Host "  Approved:   $('{0:N0}' -f $approvedLatest) campaign-to-date$apDeltaTxt" -ForegroundColor Cyan
+    }
     $netLabel = if ($netChange -gt 0) { 'access reduced' } elseif ($netChange -lt 0) { 'access grew' } else { 'no net change' }
     $netSign = if ($netChange -gt 0) { "+$netChange" } else { "$netChange" }
     Write-Host "  Net Change: $netSign ($netLabel)" -ForegroundColor Yellow
@@ -447,17 +598,39 @@ if ($OutputMode -in @('HTML', 'Both')) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $outFile = Join-Path $OutputPath "Decision-Activity-Tracker-$stamp.html"
 
-    $trendSvg = New-SvgDailyDecisionTrend -Dates $dateLabels -RevokedCounts $revokedCounts -NewScopeCounts $newScopeCounts
+    $trendSvg        = New-SvgDailyDecisionTrend -Dates $activityLabels -RevokedCounts $revokedCounts -NewScopeCounts $newScopeCounts
+    $revokedOnlySvg  = New-SvgDailySeries -Dates $activityLabels -Counts $revokedCounts  -Fill '#c0392b'
+    $newScopeOnlySvg = New-SvgDailySeries -Dates $activityLabels -Counts $newScopeCounts -Fill '#27ae60'
+
+    # Raw per-day numbers backing the charts (exact counts even when bars are too
+    # narrow to carry value labels).
+    $dailyNumbersRows = if ($activityLabels.Count -gt 0) {
+        (0..($activityLabels.Count - 1) | ForEach-Object {
+            $net = $revokedCounts[$_] - $newScopeCounts[$_]
+            "<tr><td>$(ConvertTo-Safe $activityLabels[$_])</td><td style='text-align:right'>$($revokedCounts[$_])</td><td style='text-align:right'>$($newScopeCounts[$_])</td><td style='text-align:right'>$(if ($net -gt 0) { "+$net" } else { $net })</td></tr>"
+        }) -join "`n"
+    } else { "<tr><td colspan='4' style='color:#777;font-style:italic'>No decision activity found.</td></tr>" }
+
+    # Approved KPI tile (only when the campaign summary table was scrapeable)
+    $approvedKpi = if ($approvedLatest -ge 0) {
+        $apDeltaLbl = if ($null -ne $approvedDelta) { ", $(if ($approvedDelta -ge 0) { "+$approvedDelta" } else { $approvedDelta }) this window" } else { '' }
+        "<div class='kpi'><div class='value' style='color:#2c7fb8'>$('{0:N0}' -f $approvedLatest)</div><div class='label'>Approved (campaign-to-date$apDeltaLbl)</div></div>"
+    } else { '' }
 
     # Net change styling
     $netColor = if ($netChange -gt 0) { '#27ae60' } elseif ($netChange -lt 0) { '#c0392b' } else { '#888' }
     $netDisplay = if ($netChange -gt 0) { "+$netChange" } else { "$netChange" }
     $netNote = if ($netChange -gt 0) { 'access reduced' } elseif ($netChange -lt 0) { 'access grew' } else { 'no net change' }
 
+    # Detail registers get a hard default cap: a single real report day can carry 17k+
+    # new-scope rows, and an unbounded register made the "Word/email safe" HTML tens of
+    # MB. -Top overrides; any truncation is disclosed in the section header.
+    $detailLimit = if ($Top -gt 0) { $Top } else { 500 }
+
     # Section 3: Revoked detail table
     $revokedSorted = @($allRevoked | Sort-Object -Property @{Expression='Date';Descending=$true}, @{Expression='Identity'})
-    if ($Top -gt 0) { $revokedSorted = @($revokedSorted | Select-Object -First $Top) }
-    $revokedDetailRows = ($revokedSorted | ForEach-Object {
+    $revokedShown = @($revokedSorted | Select-Object -First $detailLimit)
+    $revokedDetailRows = ($revokedShown | ForEach-Object {
         "<tr><td>$(ConvertTo-Safe $_.Date)</td><td>$(ConvertTo-Safe $_.Identity)</td><td>$(ConvertTo-Safe $_.AccessName)</td><td>$(ConvertTo-Safe $_.Source)</td><td>$(ConvertTo-Safe $_.Reviewer)</td><td>$(ConvertTo-Safe $_.Justification)</td></tr>"
     }) -join "`n"
 
@@ -473,8 +646,8 @@ if ($OutputMode -in @('HTML', 'Both')) {
 
     # Section 6: New scope detail table
     $newScopeSorted = @($allNewScope | Sort-Object -Property @{Expression='Date';Descending=$true}, @{Expression='Identity'})
-    if ($Top -gt 0) { $newScopeSorted = @($newScopeSorted | Select-Object -First $Top) }
-    $newScopeDetailRows = ($newScopeSorted | ForEach-Object {
+    $newScopeShown = @($newScopeSorted | Select-Object -First $detailLimit)
+    $newScopeDetailRows = ($newScopeShown | ForEach-Object {
         "<tr><td>$(ConvertTo-Safe $_.Date)</td><td>$(ConvertTo-Safe $_.Identity)</td><td>$(ConvertTo-Safe $_.AccessName)</td><td>$(ConvertTo-Safe $_.Source)</td><td>$(ConvertTo-Safe $_.Reviewer)</td></tr>"
     }) -join "`n"
 
@@ -486,14 +659,15 @@ if ($OutputMode -in @('HTML', 'Both')) {
         "<tr><td>$(ConvertTo-Safe $_.Source)</td><td style='text-align:right'>$($_.Revoked)</td><td style='text-align:right'>$($_.NewScope)</td><td style='text-align:right;color:$ncColor;font-weight:600'>$ncDisplay</td></tr>"
     }) -join "`n"
 
-    $revokedDetailNote = if ($Top -gt 0) { " (showing top $Top)" } else { '' }
-    $newScopeDetailNote = if ($Top -gt 0) { " (showing top $Top)" } else { '' }
+    $revokedDetailNote = if ($allRevoked.Count -gt $detailLimit) { " (showing $detailLimit of $($allRevoked.Count) -- use -Top to adjust)" } else { '' }
+    $newScopeDetailNote = if ($allNewScope.Count -gt $detailLimit) { " (showing $detailLimit of $($allNewScope.Count) -- use -Top to adjust)" } else { '' }
 
     $doc = @"
 <!DOCTYPE html><html><head><meta charset='utf-8'><title>Decision Activity Tracker</title>
 <style>
 body{font-family:Segoe UI,Arial,sans-serif;color:#222;margin:18px;background:#fff}
 h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:22px 0 8px;border-bottom:1px solid #e1e4e8;padding-bottom:4px}
+h3{font-size:13px;margin:14px 0 4px;color:#444}
 .meta{color:#555;font-size:12px;margin-bottom:6px}
 table.report{border-collapse:collapse;font-size:12px;margin-top:6px}
 table.report th,table.report td{border:1px solid #e1e4e8;padding:4px 8px}
@@ -506,26 +680,40 @@ table.report th{background:#f6f8fa;text-align:left}
 summary{cursor:pointer;font-weight:600;padding:4px 0}
 </style></head><body>
 <h1>Decision Activity Tracker</h1>
-<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $totalDays day(s) from $($reports.Count) report(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
-<div class='note'>Sourced from daily evidence reports. Summarizes revoked and newly approved access decisions across the reporting period.</div>
+<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $totalDays day(s) from $($reports.Count) report(s), $($reports[0].Label) &rarr; $($reports[-1].Label)$(if ($fallbackFileCount -gt 0) { " &nbsp;|&nbsp; $fallbackFileCount file(s) dated by file-modified time" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
+<div class='note'>Sourced from daily evidence reports. Summarizes revoked and newly approved access decisions across the reporting period. "New Scope" counts truly new access only -- "Newly Decided" approvals of items that already existed in the prior campaign are intentionally excluded from these totals and from Net Change.</div>
 
 <h2>1. Decision Activity Summary</h2>
 <div class='kpi-row'>
-<div class='kpi'><div class='value' style='color:#c0392b'>$totalRevoked</div><div class='label'>Total Revoked</div></div>
-<div class='kpi'><div class='value' style='color:#27ae60'>$totalNewScope</div><div class='label'>Total New Scope</div></div>
+<div class='kpi'><div class='value' style='color:#c0392b'>$totalRevoked</div><div class='label'>Total Revoked (distinct)</div></div>
+<div class='kpi'><div class='value' style='color:#27ae60'>$totalNewScope</div><div class='label'>Total New Scope (distinct)</div></div>
+$approvedKpi
 <div class='kpi'><div class='value' style='color:$netColor'>$netDisplay</div><div class='label'>Net Change ($netNote)</div></div>
 <div class='kpi'><div class='value' style='color:#336699'>$totalDays</div><div class='label'>Report Days</div></div>
-<div class='kpi'><div class='value' style='color:#c0392b'>$avgRevoked</div><div class='label'>Avg Revoked/Day</div></div>
-<div class='kpi'><div class='value' style='color:#27ae60'>$avgNewScope</div><div class='label'>Avg New Scope/Day</div></div>
+<div class='kpi'><div class='value' style='color:#336699'>$activityDays</div><div class='label'>Decision Days</div></div>
+<div class='kpi'><div class='value' style='color:#c0392b'>$avgRevoked</div><div class='label'>Avg Revoked/Decision Day</div></div>
+<div class='kpi'><div class='value' style='color:#27ae60'>$avgNewScope</div><div class='label'>Avg New Scope/Decision Day</div></div>
 </div>
 
 <h2>2. Daily Decision Trend</h2>
-<div class='note'>Red bars = revoked items; green bars = newly approved (new scope) items per report day.</div>
+<div class='note'>Counts are bucketed by each item's own Decision Date (not the report file date) and de-duplicated
+across the window's cumulative daily snapshots -- the same revocation listed in 20 consecutive reports counts once,
+on the day it was decided. Red = revoked; green = newly approved (new scope).</div>
+<h3>Combined &mdash; revoked vs new scope per day</h3>
 <div style='overflow-x:auto'>$trendSvg</div>
+<h3>Revoked only</h3>
+<div style='overflow-x:auto'>$revokedOnlySvg</div>
+<h3>New scope only</h3>
+<div style='overflow-x:auto'>$newScopeOnlySvg</div>
+<h3>Raw daily numbers</h3>
+<table class='report'><thead><tr><th>Decision Day</th><th style='text-align:right'>Revoked</th><th style='text-align:right'>New Scope</th><th style='text-align:right'>Net (Rev - New)</th></tr></thead>
+<tbody>
+$dailyNumbersRows
+</tbody></table>
 
 <h2>3. Revoked Access Detail</h2>
-<details><summary>Revoked Access Register &mdash; $totalRevoked items across $totalDays day(s)$revokedDetailNote</summary>
-<table class='report'><thead><tr><th>Date</th><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Justification</th></tr></thead>
+<details><summary>Revoked Access Register &mdash; $totalRevoked distinct items across $activityDays decision day(s)$revokedDetailNote</summary>
+<table class='report'><thead><tr><th>Decision Day</th><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Justification</th></tr></thead>
 <tbody>
 $revokedDetailRows
 </tbody></table>
@@ -546,8 +734,8 @@ $identityTableRows
 </tbody></table>
 
 <h2>6. New Scope &mdash; Approved Access</h2>
-<details><summary>New Scope &mdash; Approved Access &mdash; $totalNewScope items across $totalDays day(s)$newScopeDetailNote</summary>
-<table class='report'><thead><tr><th>Date</th><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th></tr></thead>
+<details><summary>New Scope &mdash; Approved Access &mdash; $totalNewScope distinct items across $activityDays decision day(s)$newScopeDetailNote</summary>
+<table class='report'><thead><tr><th>Decision Day</th><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th></tr></thead>
 <tbody>
 $newScopeDetailRows
 </tbody></table>

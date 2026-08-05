@@ -1500,6 +1500,18 @@ ISC API  -->  V4 / V4b  -->  items cache + snapshots + daily-metrics.jsonl  --> 
                        \-->  per-campaign HTML evidence report
 ```
 
+> **Known limitation -- "Newly Decided" and reassignments (fixed in V4g/V8, not here).**
+> V4/V4b compute "Newly Decided -- Approved Since Prior Campaign" from a two-campaign
+> snapshot diff gated by a recurrence heuristic that reads a SINGLE-campaign run as
+> "not recurring" -- exactly the daily-attestation case -- so routine catch-up approvals
+> of items that sat pending yesterday get flagged as newly decided. The persistent
+> entitlement state DB in **V4g/V8** is the authoritative source: it only reports
+> OBSERVED PENDING/UNDECIDED -> decided transitions, never first-seen-already-decided
+> items, which also makes it reassignment-safe (an item the original reviewer already
+> approved enters the DB as APPROVE, so a delegate's later re-approval is invisible).
+> Prefer V4g (or V8) for daily newly-decided evidence; treat the V4/V4b section as
+> legacy.
+
 **Why this pipeline exists — honest completion tracking across ACTIVE and COMPLETED.** After a
 campaign is force-completed, ISC's API *inflates* the data: it auto-approves leftover items (marking
 them `idNowAutoApproved`), reports `decisionsMade = decisionsTotal`, and sets every certification to
@@ -1720,6 +1732,50 @@ Parameters are identical to V4c:
 `Invoke-SPDailyEvidenceReportV4b.ps1` (the chrome source V4e reproduces AND the data engine whose rich
 cache it reads).
 
+### `Invoke-SPDailyEvidenceReportV4g.ps1`
+**Purpose:** **V4 with the persistent entitlement state database** -- the authoritative engine for
+"Newly Decided" and re-approval evidence (output `daily-evidence-v4g-{timestamp}.html`). Same
+fetch/render pipeline and parameters as V4/V4b, plus per-entitlement state tracked across campaign
+instances in `entitlement-state.jsonl` with four honest states: `APPROVE`, `REVOKE`, `PENDING`
+(ISC decision null), `UNDECIDED` (auto-closed `idNowAutoApproved` -- the reviewer never acted).
+
+> **Naming note:** this script briefly shipped as "V4c" on 2026-07-16, overwriting the original
+> read-only series-attestation V4c; both now exist under their own names.
+
+**Why the state DB matters (vs the V4/V4b snapshot diff):**
+- **Newly Decided = observed transitions only.** An item is newly decided only when the DB actually
+  SAW it PENDING/UNDECIDED and then saw it decided. First-seen-already-decided items are excluded --
+  the decision may be months old.
+- **Baseline-safe.** The first run over a fresh cache reports nothing as newly decided; it just
+  seeds the DB.
+- **Reassignment-safe.** Items are keyed identity + access NAME + source (ISC regenerates AccessIds
+  on reassignment), and an item the original reviewer already approved enters the DB as APPROVE --
+  a delegate's later re-approval of it is not "newly approved".
+- **Re-Approved After Revoke register.** Observed REVOKE -> APPROVE transitions render as their own
+  collapsible (identity, access, source, re-approving reviewer, revoked-on and re-approved-on days,
+  both instance-dated) -- the re-grant governance signal, kept separate from Newly Decided.
+- **All dates are the campaign instance's own day**, never the processing day -- a bootstrap over
+  months of cache does not stamp historical decisions with today.
+- The legacy diff-based Newly Decided is NOT collected in V4g (its `newlyDecidedCount` in
+  daily-metrics.jsonl is always 0); prior-snapshot selection only considers campaigns that started
+  BEFORE the current one, so a run containing both today's and yesterday's instances can never diff
+  backwards.
+
+**Cross-check:** `Invoke-SPDailyEvidenceReportV4f.ps1` computes first-genuine-approval timelines from
+the cache through an independent engine -- run both over the same window and the "newly
+approved/attested" sets should agree; disagreement localizes a bug.
+
+```powershell
+# Daily run (API capture + state DB update + HTML)
+.\Scripts\Invoke-SPDailyEvidenceReportV4g.ps1 -CampaignNameStartsWith 'daily attestation'
+
+# Re-render from existing snapshots/cache without calling ISC (state DB still updates, idempotently)
+.\Scripts\Invoke-SPDailyEvidenceReportV4g.ps1 -CampaignNameStartsWith 'daily attestation' -NoCapture
+```
+
+**Related:** `Invoke-SPDailyEvidenceReportV8.ps1` (fast renderer over the same state files),
+`Tests\SP.EntitlementState.Tests.ps1` (ES-001..ES-022 state-machine contract, incl. re-approval).
+
 ### `Update-SPStateFiles.ps1`
 **Purpose:** updates (or bootstraps) the persistent entitlement and reviewer state JSONL
 files from the rich audit cache. Uses `SP.CampaignSeries` (the same honest classifier as
@@ -1782,7 +1838,7 @@ when the state predates the end of the requested window.
 
 **Report sections:**
 1. **Entitlement State Summary** -- honest decision distribution (APPROVE / REVOKE / PENDING / UNDECIDED tiles)
-2. **Newly Decided** -- items that transitioned from PENDING/UNDECIDED to APPROVE/REVOKE within the date range
+2. **Newly Decided** -- items that transitioned from PENDING/UNDECIDED to APPROVE/REVOKE within the date range. Includes the **Re-Approved After Revoke** sub-table: observed REVOKE -> APPROVE re-grants within the window (the re-grant governance signal), with the revocation day mined from each record's state log. First-seen-already-decided items appear in neither list
 3. **Chronically Unreviewed** -- items stuck in PENDING/UNDECIDED for N+ consecutive campaigns
 4. **Dropped from Scope** -- items that disappeared from all campaigns
 5. **Reviewer Engagement Summary** -- engagement scores with streaks, sorted worst-first
@@ -1838,34 +1894,81 @@ test guide.
 ### `Invoke-SPPendingReviewerScrape.ps1`
 **Purpose:** an **ad-hoc, dependency-free** scraper that answers "who keeps not attesting?" straight from
 the **daily evidence HTML files you already have** -- no ISC API, no cache, no metrics store, no V7.
-Point it at a folder of reports (default name `Daily-Attestation-Evidence-Report-<date>.html`) and it
-pulls every reviewer listed in each report's Pending / Undecided table, then charts who shows up
-repeatedly. Handy as a bridge while the cache-based trending is adopted, or as an independent
-cross-check when V7 looks off. Because it reads finished HTML rather than the API or cache, it is
-unaffected by cache or metrics-store state.
+Point it at a folder of reports (defaults match the production `daily-evidence-v4b-*.html` name plus
+the legacy `Daily-Attestation-Evidence-Report-*.html`) and it pulls every reviewer listed in each
+report's Pending / Undecided table, then charts who shows up repeatedly. Handy as a bridge while the
+cache-based trending is adopted, or as an independent cross-check when V7 looks off. Because it reads
+finished HTML rather than the API or cache, it is unaffected by cache or metrics-store state.
+
+**Parsing hardening:** the reviewer column is resolved from each table's header row (V4d-style item
+tables, whose first column is an identity, fall back to their subhead reviewer names); placeholder
+rows (`N/A`, `(Unassigned)`, "No undecided reviewers.", V4e empty-state rows) are filtered; files
+whose names fail date parsing are dated by file-modified time WITHOUT splitting the day into two
+aggregation keys (provenance is noted in the report header instead).
 
 It renders a self-contained inline-SVG dashboard (no JavaScript -- Word/email safe):
-1. **Chronic-Pending bars** -- per reviewer, appeared pending in X of N reports (percentage).
+1. **Chronic-Pending bars** -- per reviewer, appeared pending in X of N report days (percentage),
+   with optional `-ShowTrend` indicators (Improving / Lagging / Inconsistent / Steady / Recently flagged).
 2. **Reviewer-by-Date heatmap** -- a red cell wherever a reviewer was pending that day.
-3. **Missed-Review Streak flags** -- reviewers pending N calendar days **in a row** (threshold 2 when
-   fewer than 3 reports are in scope, otherwise 3), so a genuine multi-day lapse is called out.
-4. **Daily distinct-pending trend** bars.
+3. **Missed-Review Streak flags** -- reviewers pending N **consecutive REPORT days** (threshold 2 when
+   fewer than 3 reports are in scope, otherwise 3). Weekends/holidays with no report do NOT reset a
+   run; a completed report day does.
+4. **Daily distinct-pending trend** bars (adaptive width + thinned rotated labels for 15-90+ day windows).
+5. **Engagement pattern analysis** (runs when more than 5 report days are in scope).
 
 | Parameter | Description |
 |---|---|
 | `-Path <folder>` | Folder of report HTML files. Default `.\Audit\daily-evidence`. |
-| `-FilePattern` | Wildcard for the files. Default `Daily-Attestation-Evidence-Report-*.html`. |
+| `-FilePattern` | One or more wildcards. Default `daily-evidence-v4b-*.html` + `Daily-Attestation-Evidence-Report-*.html`. |
+| `-DaysBack <n>` | The N most recent REPORT days (not calendar days); respects `-Until`; overrides `-Since`. |
 | `-Since` / `-Until` | Optional inclusive date bounds; the date is auto-parsed from each filename. |
+| `-MinMisses <n>` | Minimum pending days to appear. Default `-1` = auto: 1 when 5 or fewer report days, else 3. |
 | `-Top <n>` | Limit the bars/heatmap to the N most-pending reviewers (0 for all). |
+| `-ShowTrend` | Opt-in first-half vs second-half trend indicators on the bar chart. |
 | `-OutputMode` | `Console`/`HTML`/`Both`. |
 
 ```powershell
-# Point at a folder of your final attestation reports; last 3 days
-.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -Path 'C:\Reports\DailyEvidence' -Since (Get-Date).AddDays(-2).ToString('yyyy-MM-dd') -OutputMode Both
+# Point at a folder of your final attestation reports; last 3 report days
+.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -Path 'C:\Reports\DailyEvidence' -DaysBack 3 -OutputMode Both
 ```
 
 **Read-only** (no `SupportsShouldProcess`). **Output:** `Pending-Reviewer-Tracker-<timestamp>.html` in the
 output folder.
+
+### `Invoke-SPDecisionScrape.ps1`
+**Purpose:** the companion **decision-activity scraper** -- revoked and newly approved access across
+the reporting period, from the same daily evidence HTML folder. Read-only, no ISC API, no cache.
+
+**Critical semantics:** the V4b registers are **cumulative campaign snapshots** (every daily report
+re-lists all decisions made so far, each row carrying the item's own Decision Date). The scraper
+**de-duplicates** items across the window (identity + access + source + reviewer + decision date,
+first sighting wins) and **buckets by each item's own Decision Date**, never the report file's date.
+Without this, a 30-day window over-counted every item once per day it survived in, and put decisions
+on the wrong day. The decision-day axis can therefore start before the first report file -- that is
+the truthful timeline. The approved campaign-to-date total is scraped from the campaign summary
+table when present.
+
+Dashboard: KPI tiles (distinct revoked / distinct new scope / approved campaign-to-date / net change /
+report days / decision days / averages), three adaptive charts on one aligned date axis (combined
+paired red-green, revoked-only, new-scope-only) plus a raw per-day numbers table, the revoked
+register (default cap 500 rows, `-Top` overrides, truncation disclosed), top revoked
+entitlements/identities, new-scope register, and a per-source breakdown. "Newly Decided" approvals of
+pre-existing items are intentionally excluded from New Scope and Net Change -- that signal belongs to
+the V4g/V8 state pipeline.
+
+| Parameter | Description |
+|---|---|
+| `-Path` / `-FilePattern` | Same defaults and semantics as the pending scraper. |
+| `-DaysBack` / `-Since` / `-Until` | Same report-day window semantics as the pending scraper. |
+| `-Top <n>` | Row limit for detail registers and rankings. Default 0 = 500 detail / 15 ranking rows. |
+| `-OutputMode` | `Console`/`HTML`/`Both`. |
+
+```powershell
+# Last 30 report days with default caps
+.\Scripts\Invoke-SPDecisionScrape.ps1 -Path .\Audit\daily-evidence -DaysBack 30
+```
+
+**Read-only.** **Output:** `Decision-Activity-Tracker-<timestamp>.html` in the output folder.
 
 ### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an

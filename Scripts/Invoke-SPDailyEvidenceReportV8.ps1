@@ -24,7 +24,8 @@
 
     Report sections (8):
       1  Entitlement State Summary (KPI tiles)
-      2  Newly Decided (state transitions matching lastRunDate)
+      2  Newly Decided (state transitions in the date window) + Re-Approved After
+         Revoke sub-table (observed REVOKE -> APPROVE re-grants in the window)
       3  Chronically Unreviewed (consecutiveUndecided >= threshold)
       4  Dropped from Scope (inCurrentScope == false)
       5  Reviewer Engagement Summary (score table + KPI tiles)
@@ -620,6 +621,48 @@ foreach ($sk in $entStateMap.Keys) {
 $newlyDecidedSorted = @($newlyDecidedList | Sort-Object { $_['StateChangedDate'] } -Descending)
 Write-Host "    Newly decided:      $($newlyDecidedSorted.Count)" -ForegroundColor DarkGray
 
+# --- Section 2b: Re-approved after revoke (observed REVOKE -> APPROVE in range) ---
+# The re-grant governance signal: access genuinely revoked in an earlier instance and
+# genuinely re-approved later. Section 2's PENDING/UNDECIDED filter deliberately
+# excludes these, so without this list they were invisible. A record keeps ONE
+# prior/current pair, so this catches items whose LAST transition was the re-approval;
+# the revocation day is mined from the record's stateLog (last R: entry).
+$reApprovedList = [System.Collections.Generic.List[hashtable]]::new()
+foreach ($sk in $entStateMap.Keys) {
+    $rec = $entStateMap[$sk]
+    if ([string]$rec['currentDecision'] -ne 'APPROVE') { continue }
+    $priorDecision = ''
+    if ($rec.ContainsKey('priorDecision')) { $priorDecision = [string]$rec['priorDecision'] }
+    if ($priorDecision -ne 'REVOKE') { continue }
+    $changeDate = ''
+    if ($rec.ContainsKey('lastStateChangeDate')) { $changeDate = [string]$rec['lastStateChangeDate'] }
+    if ([string]::IsNullOrWhiteSpace($changeDate)) { continue }
+    if ($changeDate -lt $filterStartDate -or $changeDate -gt $filterEndDate) { continue }
+
+    $revokedOn = ''
+    if ($rec.ContainsKey('stateLog')) {
+        $logEntries = ([string]$rec['stateLog']) -split '\|'
+        for ($li = $logEntries.Count - 1; $li -ge 0; $li--) {
+            if ($logEntries[$li] -like 'R:*') {
+                $rd = $logEntries[$li].Substring(2)
+                if ($rd.Length -eq 8) { $revokedOn = $rd.Substring(0, 4) + '-' + $rd.Substring(4, 2) + '-' + $rd.Substring(6, 2) }
+                break
+            }
+        }
+    }
+
+    $reApprovedList.Add(@{
+        IdentityName   = [string]$rec['identityName']
+        AccessName     = [string]$rec['accessName']
+        SourceName     = [string]$rec['sourceName']
+        ReviewerName   = [string]$rec['reviewerName']
+        RevokedOn      = $revokedOn
+        ReApprovedDate = $changeDate
+    })
+}
+$reApprovedSorted = @($reApprovedList | Sort-Object { $_['ReApprovedDate'] } -Descending)
+Write-Host "    Re-approved:        $($reApprovedSorted.Count)" -ForegroundColor DarkGray
+
 # --- Section 3: Chronically unreviewed ---
 $chronicList = [System.Collections.Generic.List[hashtable]]::new()
 foreach ($sk in $entStateMap.Keys) {
@@ -993,6 +1036,28 @@ else {
         [void]$sb.Append("<td class='$stateClass'>$(ConvertTo-SPHtmlSafe $nd['CurrentState'])</td>")
         [void]$sb.Append("<td>$(ConvertTo-SPHtmlSafe $nd['ReviewerName'])</td>")
         [void]$sb.Append("<td>$(ConvertTo-SPHtmlSafe $nd['StateChangedDate'])</td>")
+        [void]$sb.Append('</tr>')
+    }
+    [void]$sb.Append('</table>')
+}
+
+# Section 2b: Re-Approved After Revoke (kept inside Section 2 so the numbered
+# section list and the "only Section 2 is date-filtered" statement stay true).
+[void]$sb.Append("<div style='font-weight:600;font-size:13px;margin:14px 0 4px;color:#9a6700'>Re-Approved After Revoke ($($reApprovedSorted.Count))</div>")
+if ($reApprovedSorted.Count -eq 0) {
+    [void]$sb.Append("<p class='note'>No revoked access was re-approved between $filterStartDate and $filterEndDate.</p>")
+}
+else {
+    [void]$sb.Append("<p class='note'>Access genuinely REVOKED in an earlier campaign instance and genuinely RE-APPROVED within the window -- the re-grant governance signal. Revoked On is mined from each record's state log.</p>")
+    [void]$sb.Append('<table class="report"><tr><th>Identity</th><th>Access</th><th>Source</th><th>Re-Approved By</th><th>Revoked On</th><th>Re-Approved On</th></tr>')
+    foreach ($ra in $reApprovedSorted) {
+        [void]$sb.Append('<tr>')
+        [void]$sb.Append("<td>$(ConvertTo-SPHtmlSafe $ra['IdentityName'])</td>")
+        [void]$sb.Append("<td>$(ConvertTo-SPHtmlSafe $ra['AccessName'])</td>")
+        [void]$sb.Append("<td>$(ConvertTo-SPHtmlSafe $ra['SourceName'])</td>")
+        [void]$sb.Append("<td>$(ConvertTo-SPHtmlSafe $ra['ReviewerName'])</td>")
+        [void]$sb.Append("<td class='s-red'>$(ConvertTo-SPHtmlSafe $ra['RevokedOn'])</td>")
+        [void]$sb.Append("<td class='s-green'>$(ConvertTo-SPHtmlSafe $ra['ReApprovedDate'])</td>")
         [void]$sb.Append('</tr>')
     }
     [void]$sb.Append('</table>')

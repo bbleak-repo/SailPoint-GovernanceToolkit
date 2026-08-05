@@ -5,9 +5,10 @@
     keep showing up as Pending / Undecided. A bridge while the cache-based trending matures.
 
 .DESCRIPTION
-    Reads the "final" daily evidence HTML reports you already produce -- by default named
-    Daily-Attestation-Evidence-Report-<date>.html, where <date> is auto-parsed from the filename
-    (falling back to the file's LastWriteTime). For each report it finds every collapsible whose
+    Reads the "final" daily evidence HTML reports you already produce -- by default matching the
+    production V4b output name daily-evidence-v4b-<stamp>.html plus the legacy/mock name
+    Daily-Attestation-Evidence-Report-<date>.html, with the report date auto-parsed from the
+    filename (falling back to the file's LastWriteTime). For each report it finds every collapsible whose
     <summary> mentions "Pending" or "Undecided" (the day-end ACTIVE-campaign accountability list)
     and pulls the reviewer name from each table row. A reviewer is counted once per report.
 
@@ -22,7 +23,8 @@
     Folder containing the daily evidence HTML reports. Default: .\Audit\daily-evidence.
 
 .PARAMETER FilePattern
-    Wildcard for the report files. Default: 'Daily-Attestation-Evidence-Report-*.html'.
+    One or more wildcards for the report files. Default matches the production V4b output
+    ('daily-evidence-v4b-*.html') plus the legacy/mock name ('Daily-Attestation-Evidence-Report-*.html').
 
 .PARAMETER DaysBack
     Number of report DAYS to include (not calendar days). If the folder has reports for
@@ -45,9 +47,9 @@
     Limit the bar chart + heatmap to the Top N most-pending reviewers (0 = all). Default 0.
 
 .PARAMETER MinMisses
-    Only include reviewers who appeared pending in at least N reports. Default 1 (include everyone);
-    pass -MinMisses 2 to leave off folks who only missed a single day. Applies to every reviewer view
-    (bars, missed-day streak flags, heatmap, detail table).
+    Only include reviewers who appeared pending in at least N report days. Default -1 = auto:
+    1 (include everyone) when the window has 5 or fewer report days, else 3 to filter noise.
+    Applies to every reviewer view (bars, missed-day streak flags, heatmap, detail table).
 
 .EXAMPLE
     .\Invoke-SPPendingReviewerScrape.ps1 -Path 'C:\Reports\DailyEvidence' -Since '2026-06-01'
@@ -58,7 +60,7 @@
 [CmdletBinding()]
 param(
     [Parameter()][string]$Path = '.\Audit\daily-evidence',
-    [Parameter()][string]$FilePattern = 'Daily-Attestation-Evidence-Report-*.html',
+    [Parameter()][string[]]$FilePattern = @('daily-evidence-v4b-*.html', 'Daily-Attestation-Evidence-Report-*.html'),
     [Parameter()][int]$DaysBack = 0,
     [Parameter()][string]$Since,
     [Parameter()][string]$Until,
@@ -67,7 +69,7 @@ param(
     [Parameter()][int]$Top = 0,
     [Parameter()][int]$MinMisses = -1,
     [Parameter()][switch]$ShowTrend,
-    [Parameter()][Alias('?')][switch]$Help
+    [Parameter()][switch]$Help
 )
 
 Set-StrictMode -Version 1
@@ -89,7 +91,7 @@ function Remove-HtmlTags {
 
 function Resolve-ReportDate {
     # Extract a sortable date for a report file: parse the token after the prefix; fall back to
-    # the file's LastWriteTime. Returns @{ Date=[datetime]; Label=[string] }.
+    # the file's LastWriteTime. Returns @{ Date=[datetime]; Label=[string]; Fallback=[bool] }.
     param([System.IO.FileInfo]$File)
     $token = $File.BaseName
     # strip a leading known prefix to isolate the date-looking tail
@@ -105,16 +107,33 @@ function Resolve-ReportDate {
             # .Date: the HHmmss formats carry a time-of-day, and the -Since/-Until
             # window compares against midnight-normalized bounds -- an un-normalized
             # 15:30 report silently fell OUTSIDE an inclusive -Until on its own day.
-            return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd') }
+            return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd'); Fallback = $false }
         }
     }
     # Loose parse of the first date-looking chunk
     $m = [regex]::Match($token, '\d{4}[-.]?\d{2}[-.]?\d{2}')
     if ($m.Success) {
         $dt = [datetime]::MinValue
-        if ([datetime]::TryParse($m.Value, [ref]$dt)) { return @{ Date = $dt; Label = $dt.ToString('yyyy-MM-dd') } }
+        if ([datetime]::TryParse($m.Value, [ref]$dt)) { return @{ Date = $dt.Date; Label = $dt.ToString('yyyy-MM-dd'); Fallback = $false } }
     }
-    return @{ Date = $File.LastWriteTime.Date; Label = $File.LastWriteTime.ToString('yyyy-MM-dd') + '*' }
+    # Fallback: date the file by its LastWriteTime. The label stays the plain date -- a
+    # starred label here split one calendar day into two aggregation keys whenever a
+    # same-day file failed filename parsing, silently re-enabling the double-count the
+    # day-dedup exists to prevent. Fallback provenance is surfaced in the meta line instead.
+    return @{ Date = $File.LastWriteTime.Date; Label = $File.LastWriteTime.ToString('yyyy-MM-dd'); Fallback = $true }
+}
+
+function Test-ReviewerNameReal {
+    # Shared row filter: drop blanks, unassigned markers, N/A stand-ins, empty-state
+    # placeholder rows ("No undecided reviewers.", "No persistently-undecided items in
+    # this window."), and colspan notes too long to be a name.
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
+    if ($Name.Length -gt 120) { return $false }
+    if ($Name -match '(?i)^\(?unassigned\)?$') { return $false }
+    if ($Name -match '(?i)^(n/?a|none|-+)$') { return $false }
+    if ($Name -match '(?i)^no\b.*\b(undecided|decisions?|items?|reviewers?|approvals?)\b') { return $false }
+    return $true
 }
 
 function Get-PendingReviewers {
@@ -131,45 +150,66 @@ function Get-PendingReviewers {
         # Only the Pending/Undecided reviewer tables; skip Completed/Reassigned/Approved/Revoked sections.
         if ($summaryText -notmatch '(?i)pending|undecided') { continue }
         if ($summaryText -match '(?i)\b(completed|reassigned|approved|revoked)\b') { continue }
-        # ALL tables in the collapsible, not just the first -- per-reviewer subhead+table
-        # layouts (V4d/V4e style) put each reviewer in a separate table, and Match (singular)
-        # silently dropped everyone after the first table.
+        # ALL tables in the collapsible, not just the first. Which column holds the reviewer
+        # name is resolved from each table's header row: V4b/V4e put Reviewer first, but V4d
+        # item tables (Identity|Access|Source|State) have NO Reviewer column at all -- their
+        # reviewer lives in a subhead div above the table, and blindly reading column 0
+        # counted end-user identities as reviewers. A table with headers but no Reviewer
+        # column is skipped, and the block's subhead names are harvested instead.
         $tbls = [regex]::Matches($block, '<table\b[^>]*>(.*?)</table>', 'Singleline')
         if ($tbls.Count -eq 0) { continue }
+        $needSubheadFallback = $false
         foreach ($tbl in $tbls) {
-        foreach ($row in [regex]::Matches($tbl.Groups[1].Value, '<tr\b[^>]*>(.*?)</tr>', 'Singleline')) {
-            $cells = [regex]::Matches($row.Groups[1].Value, '<t[dh]\b[^>]*>(.*?)</t[dh]>', 'Singleline')
-            if ($cells.Count -eq 0) { continue }
-            if ($row.Groups[1].Value -match '<th\b') { continue }   # header row
-            $name = Remove-HtmlTags $cells[0].Groups[1].Value
-            if ([string]::IsNullOrWhiteSpace($name)) { continue }
-            if ($name -match '(?i)^\(?unassigned\)?$') { continue }
-            if ($name -match '(?i)no (undecided|decisions|items)') { continue }   # placeholder row
-            if ($name.Length -gt 120) { continue }                                # not a name (a colspan note)
-            [void]$names.Add($name)
+            $tblHtml = $tbl.Groups[1].Value
+            $nameIdx = 0
+            $ths = [regex]::Matches($tblHtml, '<th\b[^>]*>(.*?)</th>', 'Singleline')
+            if ($ths.Count -gt 0) {
+                $nameIdx = -1
+                for ($i = 0; $i -lt $ths.Count; $i++) {
+                    if ((Remove-HtmlTags $ths[$i].Groups[1].Value) -match '(?i)reviewer') { $nameIdx = $i; break }
+                }
+                if ($nameIdx -lt 0) { $needSubheadFallback = $true; continue }   # item table, not a reviewer table
+            }
+            foreach ($row in [regex]::Matches($tblHtml, '<tr\b[^>]*>(.*?)</tr>', 'Singleline')) {
+                if ($row.Groups[1].Value -match '<th\b') { continue }   # header row
+                $cells = [regex]::Matches($row.Groups[1].Value, '<t[dh]\b[^>]*>(.*?)</t[dh]>', 'Singleline')
+                if ($cells.Count -le $nameIdx) { continue }
+                $name = Remove-HtmlTags $cells[$nameIdx].Groups[1].Value
+                if (Test-ReviewerNameReal $name) { [void]$names.Add($name) }
+            }
         }
+        # V4d layout: reviewer names live in <div class='subhead'>Name <span badge>N</span></div>
+        # inside the collapsible; harvest them when the tables carried no Reviewer column.
+        if ($needSubheadFallback) {
+            foreach ($sh in [regex]::Matches($block, '<div\b[^>]*class=[''"][^''"]*subhead[^''"]*[''"][^>]*>(.*?)</div>', 'Singleline')) {
+                $inner = [regex]::Replace($sh.Groups[1].Value, '<span\b[^>]*>.*?</span>', ' ')
+                $name = Remove-HtmlTags $inner
+                if (Test-ReviewerNameReal $name) { [void]$names.Add($name) }
+            }
         }
     }
     return @($names)
 }
 
 function Get-ReviewerStreak {
-    # Longest run of CONSECUTIVE calendar days a reviewer was pending (a missing day's report OR a
-    # not-pending day breaks the run). Also returns the total distinct days pending. DistinctDates is
-    # sorted [datetime]; ByDate maps 'yyyy-MM-dd' -> HashSet of pending reviewer names.
+    # Longest run of CONSECUTIVE REPORT DAYS a reviewer was pending. Adjacency is by report
+    # day, not calendar day: reports only exist on business days, so calendar-day adjacency
+    # made a Thu-Fri-Mon-Tue run read as two 2-day streaks -- a "3+ consecutive days" flag
+    # could only ever fire within a single Mon-Fri week. A weekend/holiday with no report
+    # does not break a run; a report day where the reviewer completed does. Also returns the
+    # total distinct days pending. DistinctDates is sorted [datetime]; ByDate maps
+    # 'yyyy-MM-dd' -> HashSet of pending reviewer names.
     param([string]$Name, $DistinctDates, $ByDate)
     $max = 0; $cur = 0; $total = 0
-    $prev = $null; $prevPending = $false; $curStart = $null; $maxStart = $null; $maxEnd = $null
+    $curStart = $null; $maxStart = $null; $maxEnd = $null
     foreach ($dt in $DistinctDates) {
-        $pending = $ByDate[$dt.ToString('yyyy-MM-dd')].Contains($Name)
-        if ($pending) {
+        if ($ByDate[$dt.ToString('yyyy-MM-dd')].Contains($Name)) {
             $total++
-            if ($prevPending -and $null -ne $prev -and ($dt - $prev).Days -eq 1) { $cur++ }
-            else { $cur = 1; $curStart = $dt }
+            if ($cur -eq 0) { $curStart = $dt }
+            $cur++
             if ($cur -gt $max) { $max = $cur; $maxStart = $curStart; $maxEnd = $dt }
         }
         else { $cur = 0 }
-        $prev = $dt; $prevPending = $pending
     }
     return @{ Max = $max; Start = $maxStart; End = $maxEnd; Total = $total }
 }
@@ -262,8 +302,13 @@ function Get-ReviewerTrend {
 # Inline-SVG chart builders (no JS -- Word/email safe), V7-style palette.
 # ---------------------------------------------------------------------------
 function New-SvgChronicBars {
-    param($Rows, [int]$Total, $TrendData)
-    if ($Rows.Count -eq 0) { return '<p style="color:#27ae60">All reviewers completed their attestations -- no outstanding reviews.</p>' }
+    param($Rows, [int]$Total, $TrendData, [int]$ExcludedCount = 0, [int]$MinMisses = 1)
+    if ($Rows.Count -eq 0) {
+        # Distinguish "nobody was outstanding" from "everyone fell under -MinMisses" --
+        # the all-clear message is factually wrong in the second case.
+        if ($ExcludedCount -gt 0) { return "<p style='color:#777'>No reviewer reached the -MinMisses threshold of $MinMisses; $ExcludedCount reviewer(s) with fewer outstanding days were excluded. Rerun with -MinMisses 1 to see everyone.</p>" }
+        return '<p style="color:#27ae60">All reviewers completed their attestations -- no outstanding reviews.</p>'
+    }
     $hasTrend = ($null -ne $TrendData -and $TrendData.Count -gt 0)
     $barH = 18; $gap = 4; $labelW = 180; $maxBarW = 220
     $h = ($Rows.Count * ($barH + $gap)) + 6
@@ -343,21 +388,34 @@ function New-SvgHeatmap {
 
 function New-SvgDailyTrend {
     param($Dates, $Counts)   # parallel arrays: date label -> distinct-pending count
+    # Adaptive to the window length (15-90+ days): bar width shrinks as the day count
+    # grows; date labels are thinned to ~30 and rotated BELOW the axis, anchored at
+    # their top end so they slope down-left AWAY from the bars (the previous
+    # start-anchored rotate(-60) sloped them up INTO the bars); per-bar value labels
+    # render only when the bars are wide enough to hold them.
     if ($Dates.Count -eq 0) { return '<p style="color:#777">No dates to trend.</p>' }
-    $barW = 26; $gap = 8; $chartH = 160; $labelH = 60
+    $n = $Dates.Count
+    $barW = if ($n -le 20) { 26 } elseif ($n -le 45) { 14 } else { 9 }
+    $gap  = if ($n -le 20) { 8 }  elseif ($n -le 45) { 5 }  else { 3 }
+    $chartH = 160; $labelH = 64; $topPad = 14; $leftPad = 40
+    $step = [int][math]::Ceiling($n / 30.0)
     $max = ([int](@($Counts | Measure-Object -Maximum).Maximum)); if ($max -lt 1) { $max = 1 }
-    $w = ($Dates.Count * ($barW + $gap)) + 40
-    $h = $chartH + $labelH
+    $w = $leftPad + ($n * ($barW + $gap)) + 20
+    $h = $topPad + $chartH + $labelH
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append("<svg width='$w' height='$h' xmlns='http://www.w3.org/2000/svg' font-family='Segoe UI,Arial,sans-serif' font-size='10'>")
-    for ($i = 0; $i -lt $Dates.Count; $i++) {
-        $x = 30 + ($i * ($barW + $gap))
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = $leftPad + ($i * ($barW + $gap))
         $bh = [int]($chartH * ($Counts[$i] / $max))
-        $yTop = $chartH - $bh
-        [void]$sb.Append("<rect x='$x' y='$yTop' width='$barW' height='$bh' rx='3' fill='#2c7fb8'></rect>")
-        [void]$sb.Append("<text x='$($x+$barW/2)' y='$($yTop-3)' text-anchor='middle' fill='#222'>$($Counts[$i])</text>")
-        $lx = $x + ($barW / 2)
-        [void]$sb.Append("<text x='$lx' y='$($chartH+12)' transform='rotate(-60 $lx,$($chartH+12))' fill='#555'>$(ConvertTo-Safe $Dates[$i])</text>")
+        $yTop = $topPad + $chartH - $bh
+        [void]$sb.Append("<rect x='$x' y='$yTop' width='$barW' height='$bh' rx='3' fill='#2c7fb8'><title>$(ConvertTo-Safe $Dates[$i]): $($Counts[$i])</title></rect>")
+        if ($barW -ge 14) {
+            [void]$sb.Append("<text x='$($x+$barW/2)' y='$($yTop-3)' text-anchor='middle' fill='#222'>$($Counts[$i])</text>")
+        }
+        if (($i % $step) -eq 0 -or $i -eq ($n - 1)) {
+            $lx = $x + ($barW / 2); $ly = $topPad + $chartH + 12
+            [void]$sb.Append("<text x='$lx' y='$ly' text-anchor='end' transform='rotate(-60 $lx,$ly)' fill='#555'>$(ConvertTo-Safe $Dates[$i])</text>")
+        }
     }
     [void]$sb.Append('</svg>')
     return $sb.ToString()
@@ -367,34 +425,37 @@ function New-SvgDailyTrend {
 # Main
 # ---------------------------------------------------------------------------
 if (-not (Test-Path -LiteralPath $Path)) { Write-Host "ERROR: Path not found: $Path" -ForegroundColor Red; exit 2 }
-$files = @(Get-ChildItem -LiteralPath $Path -Filter $FilePattern -File | Sort-Object Name)
-if ($files.Count -eq 0) { Write-Host "No files matching '$FilePattern' in $Path" -ForegroundColor Yellow; exit 0 }
+$files = @(foreach ($pat in $FilePattern) { Get-ChildItem -LiteralPath $Path -Filter $pat -File }) |
+    Sort-Object -Property FullName -Unique
+$files = @($files | Sort-Object Name)
+if ($files.Count -eq 0) { Write-Host "No files matching '$($FilePattern -join "', '")' in $Path" -ForegroundColor Yellow; exit 0 }
+
+$sinceDt = $null; $untilDt = $null
+if ($Since) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Since, [ref]$tmp)) { $sinceDt = $tmp.Date } }
+if ($Until) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Until, [ref]$tmp)) { $untilDt = $tmp.Date } }
 
 # -DaysBack N: resolve from the actual report file dates (not calendar days).
-# Scans all files for their dates, takes the N most recent unique dates, and
-# sets $Since to the oldest of those N dates. Overrides -Since when set.
+# Takes the N most recent unique report dates inside the -Until bound (it previously
+# ignored -Until, so DaysBack+Until returned fewer days than asked) and moves the
+# since-bound to the oldest of them. Overrides -Since when set.
 if ($DaysBack -gt 0) {
     $allFileDates = [System.Collections.Generic.List[datetime]]::new()
     foreach ($f in $files) {
         $d = Resolve-ReportDate -File $f
         if ($null -ne $d -and $d.Date -ne [datetime]::MinValue) {
+            if ($null -ne $untilDt -and $d.Date -gt $untilDt) { continue }
             if (-not $allFileDates.Contains($d.Date)) { $allFileDates.Add($d.Date) }
         }
     }
     $sortedDates = @($allFileDates | Sort-Object)
     if ($sortedDates.Count -gt $DaysBack) {
-        $cutoffDate = $sortedDates[$sortedDates.Count - $DaysBack]
-        $Since = $cutoffDate.ToString('yyyy-MM-dd')
-        Write-Host "  -DaysBack $DaysBack -> using $DaysBack most recent report days (since $Since)" -ForegroundColor DarkGray
+        $sinceDt = $sortedDates[$sortedDates.Count - $DaysBack]
+        Write-Host "  -DaysBack $DaysBack -> using $DaysBack most recent report days (since $($sinceDt.ToString('yyyy-MM-dd')))" -ForegroundColor DarkGray
     }
     else {
         Write-Host "  -DaysBack $DaysBack -> only $($sortedDates.Count) report day(s) available, using all" -ForegroundColor DarkGray
     }
 }
-
-$sinceDt = $null; $untilDt = $null
-if ($Since) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Since, [ref]$tmp)) { $sinceDt = $tmp.Date } }
-if ($Until) { $tmp = [datetime]::MinValue; if ([datetime]::TryParse($Until, [ref]$tmp)) { $untilDt = $tmp.Date } }
 
 # Parse every report -> per-date set of pending reviewers.
 $reports = New-Object System.Collections.Generic.List[object]
@@ -404,7 +465,7 @@ foreach ($f in $files) {
     if ($null -ne $untilDt -and $d.Date -gt $untilDt) { continue }
     $html = Get-Content -LiteralPath $f.FullName -Raw
     $revs = Get-PendingReviewers -Html $html
-    $reports.Add([pscustomobject]@{ File = $f.Name; Date = $d.Date; Label = $d.Label; Reviewers = $revs })
+    $reports.Add([pscustomobject]@{ File = $f.Name; Date = $d.Date; Label = $d.Label; Fallback = [bool]$d.Fallback; Reviewers = $revs })
 }
 $reports = @($reports | Sort-Object Date, Label)
 if ($reports.Count -eq 0) { Write-Host "No reports in the requested date window." -ForegroundColor Yellow; exit 0 }
@@ -414,6 +475,7 @@ if ($reports.Count -eq 0) { Write-Host "No reports in the requested date window.
 # reviewer's Pct via a doubled denominator, and emit duplicate heatmap columns.
 $dateLabels = @($reports | ForEach-Object { $_.Label } | Sort-Object -Unique)
 $total = $dateLabels.Count
+$fallbackFileCount = @($reports | Where-Object Fallback).Count
 
 # Aggregate per reviewer (grid = distinct day labels; Count derives from it).
 $counts = @{}            # name -> int (distinct days pending)
@@ -427,10 +489,11 @@ foreach ($rep in $reports) {
 foreach ($name in @($counts.Keys)) { $counts[$name] = $grid[$name].Count }
 $rows = @($counts.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $_.Key; Count = $_.Value; Pct = if ($total -gt 0) { [math]::Round($_.Value * 100.0 / $total, 0) } else { 0 } } } |
           Sort-Object -Property @{Expression='Count';Descending=$true}, @{Expression='Name';Descending=$false})
-# Auto-MinMisses: if not explicitly set (-1), scale based on campaign count.
-# <= 5 campaigns: show everyone (MinMisses=1). > 5: default to 3 to filter noise.
+# Auto-MinMisses: if not explicitly set (-1), scale based on campaign-day count.
+# <= 5 campaign days: show everyone (MinMisses=1). > 5: default to 3 to filter noise
+# (same gate as the engagement pattern analysis).
 if ($MinMisses -lt 0) {
-    $MinMisses = if ($total -le 3) { 1 } else { 3 }
+    $MinMisses = if ($total -le 5) { 1 } else { 3 }
     Write-Host "  Auto-MinMisses: $MinMisses (based on $total campaign day(s))" -ForegroundColor DarkGray
 }
 
@@ -586,6 +649,7 @@ $flaggedCount = @($streakRows | Where-Object Flagged).Count
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host ''
     Write-Host "Reviewer compliance scrape: $total day(s) from $($reports.Count) report file(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " (>= $MinMisses outstanding days; $excludedByMinMisses low-count reviewer(s) excluded)" })" -ForegroundColor Cyan
+    if ($fallbackFileCount -gt 0) { Write-Host "  NOTE: $fallbackFileCount file(s) dated by file-modified time (filename date not parseable)" -ForegroundColor Yellow }
     $shown | Select-Object Name, Count, @{N='OutOf';E={$total}}, @{N='Pct';E={"$($_.Pct)%"}} | Format-Table -AutoSize | Out-String | Write-Host
     if ($flaggedCount -gt 0) {
         Write-Host "Consecutive outstanding reviews (>= $streakThreshold day(s)): $flaggedCount reviewer(s) identified" -ForegroundColor Yellow
@@ -626,7 +690,9 @@ if ($OutputMode -in @('HTML', 'Both')) {
     $trendDataMap = $null
     if ($ShowTrend -and $dateLabels.Count -ge 2) {
         $trendDataMap = @{}
-        foreach ($r in $shown) {
+        # Computed over ALL rows above MinMisses (not just -Top) so the console tallies
+        # below reflect the full population; the bar chart looks up only shown names.
+        foreach ($r in $rows) {
             $trendDataMap[$r.Name] = Get-ReviewerTrend -Name $r.Name -SortedDateLabels $dateLabels -Grid $grid -MinMissesThreshold $MinMisses
         }
         $improving    = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Improving' }).Count
@@ -636,7 +702,7 @@ if ($OutputMode -in @('HTML', 'Both')) {
         Write-Host "  Trend analysis: $improving improving, $lagging lagging, $inconsistent inconsistent, $steady steady" -ForegroundColor DarkGray
     }
 
-    $barSvg  = New-SvgChronicBars -Rows $shown -Total $total -TrendData $trendDataMap
+    $barSvg  = New-SvgChronicBars -Rows $shown -Total $total -TrendData $trendDataMap -ExcludedCount $excludedByMinMisses -MinMisses $MinMisses
     $heatSvg = New-SvgHeatmap -Reviewers $reviewerOrder -Dates $dateLabels -Grid $grid
     $trendSvg = New-SvgDailyTrend -Dates $dateLabels -Counts $dailyCounts
 
@@ -663,15 +729,14 @@ table.report th{background:#f6f8fa;text-align:left}
 .note{color:#777;font-size:11px;margin-top:4px}
 </style></head><body>
 <h1>Reviewer Attestation Compliance Tracker</h1>
-<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total day(s) from $($reports.Count) report file(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " &nbsp;|&nbsp; min $MinMisses missed days ($excludedByMinMisses excluded)" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
-<div class='note'>Sourced from daily evidence reports. Identifies reviewers with outstanding attestation decisions. A reviewer is counted once per report day.</div>
+<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total day(s) from $($reports.Count) report file(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " &nbsp;|&nbsp; min $MinMisses missed days ($excludedByMinMisses excluded)" })$(if ($fallbackFileCount -gt 0) { " &nbsp;|&nbsp; $fallbackFileCount file(s) dated by file-modified time" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
+<div class='note'>Sourced from daily evidence reports. Identifies reviewers with outstanding attestation decisions. A reviewer is counted once per report day. Covers ACTIVE-campaign Pending/Undecided sections only -- completed-campaign "Reviewers who did not complete" listings are not included.</div>
 
 <h2>1. Reviewer Escalations Pending &mdash; outstanding attestations across $total day(s)</h2>
-$(if ($false) { '' })
 $barSvg
 
 <h2>2. Consecutive Outstanding Reviews &mdash; flagged at &ge; $streakThreshold consecutive day(s)</h2>
-<div class='note'>Rule: $thresholdDesc. Data window: $distinctCount day(s) across $($reports.Count) report(s). Flagged: $flaggedCount reviewer(s). A completed day or a gap between reports resets the consecutive count.</div>
+<div class='note'>Rule: $thresholdDesc. Data window: $distinctCount day(s) across $($reports.Count) report(s). Flagged: $flaggedCount reviewer(s). Streaks run over consecutive REPORT days: a completed day resets the count; weekends/holidays with no report do not.</div>
 <table class='report'><thead><tr><th>Reviewer</th><th>Longest Consecutive Days</th><th>Window</th><th>Total Days Outstanding (of $distinctCount)</th><th>Status</th></tr></thead>
 <tbody>
 $streakTableRows

@@ -285,6 +285,9 @@ function Update-SPEntitlementState {
           3. Detects newly-decided items (an OBSERVED transition PENDING/UNDECIDED ->
              APPROVE/REVOKE; an item first seen already decided is NOT newly decided --
              the decision may be months old)
+          4. Detects re-approvals (an OBSERVED transition REVOKE -> APPROVE): access
+             that was genuinely revoked and later genuinely re-approved -- the primary
+             re-grant governance signal, kept separate from NewlyDecided
 
         All dates written to records come from -InstanceDate (the campaign's own day),
         NEVER the processing date -- a bootstrap over months of cache must not stamp
@@ -321,7 +324,7 @@ function Update-SPEntitlementState {
     .PARAMETER TodayLabel
         Fallback date when InstanceDate is blank. Defaults to current date.
     .OUTPUTS
-        Hashtable: NewlyDecided, StateSummary, StateNew, StateChanged, PriorSnapshot.
+        Hashtable: NewlyDecided, ReApproved, StateSummary, StateNew, StateChanged, PriorSnapshot.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -350,6 +353,7 @@ function Update-SPEntitlementState {
     )
 
     $newlyDecided = [System.Collections.Generic.List[object]]::new()
+    $reApproved   = [System.Collections.Generic.List[object]]::new()
     $stateNew     = 0
     $stateChanged = 0
 
@@ -442,7 +446,10 @@ function Update-SPEntitlementState {
                     continue
                 }
 
-                # State changed
+                # State changed. Capture the prior change date BEFORE it is overwritten:
+                # for a REVOKE -> APPROVE transition it is the day the item became REVOKE,
+                # which the re-approval entry reports as the revocation day.
+                $priorChangeDate = [string]$rec['lastStateChangeDate']
                 $logResult = Update-StateLogEntry -StateLog ([string]$rec['stateLog']) -DayKey $dayKey -StateCode $stateCode
                 $rec['priorDecision']       = $currentState
                 $rec['currentDecision']     = $stateCode
@@ -469,6 +476,24 @@ function Update-SPEntitlementState {
                         ReviewerName  = [string]$rec['reviewerName']
                         DecisionDate  = $effDate
                         InstanceId    = [string]$InstanceId
+                    })
+                }
+
+                # Detect re-approval: an OBSERVED REVOKE -> APPROVE transition. Access that
+                # was genuinely revoked and later genuinely re-approved is the re-grant
+                # governance signal ("revoked then re-approved later in the campaign
+                # period"); routine first decisions never land here. ReviewerName is the
+                # re-approver (already refreshed from the current item above).
+                if ($currentState -eq 'REVOKE' -and $stateCode -eq 'APPROVE') {
+                    $reApproved.Add(@{
+                        ItemKey        = $itemKey
+                        IdentityName   = [string]$rec['identityName']
+                        AccessName     = [string]$rec['accessName']
+                        SourceName     = [string]$rec['sourceName']
+                        RevokedDate    = $priorChangeDate
+                        ReApprovedDate = $effDate
+                        ReviewerName   = [string]$rec['reviewerName']
+                        InstanceId     = [string]$InstanceId
                     })
                 }
 
@@ -506,6 +531,7 @@ function Update-SPEntitlementState {
 
     return @{
         NewlyDecided       = $newlyDecided
+        ReApproved         = $reApproved
         DroppedFromScope   = [System.Collections.Generic.List[object]]::new()   # v1.1: scope moved to Invoke-SPEntitlementScopeSweep
         StateSummary       = $stateSummary
         StateNew           = $stateNew

@@ -32,6 +32,8 @@
     ES-018: Corrupt lines are counted in SkippedLines, valid lines still load
     ES-019: Retention prune removes only long-out-of-scope records
     ES-020: First-seen-already-decided is NOT NewlyDecided (no observed transition)
+    ES-021: REVOKE->APPROVE transition emits ReApproved (re-grant signal), not NewlyDecided
+    ES-022: First decisions / first-seen states never emit ReApproved
 #>
 
 BeforeAll {
@@ -821,5 +823,84 @@ Describe 'ES-020: First sighting of an already-decided item is not a new decisio
             -InstanceId 'camp-fs' -InstanceDate '2026-06-24' -TodayLabel '2026-07-15'
         $r.NewlyDecided.Count | Should -Be 0
         $r.StateNew | Should -Be 1
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-021: REVOKE->APPROVE emits ReApproved (re-grant signal), not NewlyDecided
+# ---------------------------------------------------------------------------
+Describe 'ES-021: REVOKE->APPROVE transition emits ReApproved' {
+    BeforeAll {
+        $script:stateMap = @{}
+        $revoked = New-TestResolvedItem -ItemKey 'id-ra|ent-ra|src-ra' -HonestDecision 'Revoked'
+        Update-SPEntitlementState -StateMap $script:stateMap `
+            -ResolvedItems @($revoked) -InstanceId 'camp-021a' `
+            -InstanceDate '2026-06-20' -TodayLabel '2026-06-20' | Out-Null
+
+        $approved = New-TestResolvedItem -ItemKey 'id-ra|ent-ra|src-ra' `
+            -HonestDecision 'Approved' -ReviewerName 'Delegate Reviewer'
+        $script:result = Update-SPEntitlementState -StateMap $script:stateMap `
+            -ResolvedItems @($approved) -InstanceId 'camp-021b' `
+            -InstanceDate '2026-06-27' -TodayLabel '2026-07-15'
+    }
+
+    It 'emits exactly one ReApproved entry' {
+        $script:result.ReApproved.Count | Should -Be 1
+    }
+
+    It 'is NOT reported as NewlyDecided (that list is first decisions only)' {
+        $script:result.NewlyDecided.Count | Should -Be 0
+    }
+
+    It 'reports the revocation day and re-approval day, both instance-dated (never the processing day)' {
+        $script:result.ReApproved[0].RevokedDate    | Should -Be '2026-06-20'
+        $script:result.ReApproved[0].ReApprovedDate | Should -Be '2026-06-27'
+    }
+
+    It 'attributes the re-approval to the current (re-approving) reviewer' {
+        $script:result.ReApproved[0].ReviewerName | Should -Be 'Delegate Reviewer'
+    }
+
+    It 'updates currentDecision to APPROVE with priorDecision REVOKE' {
+        $script:stateMap['id-ra|ent-ra|src-ra']['currentDecision'] | Should -Be 'APPROVE'
+        $script:stateMap['id-ra|ent-ra|src-ra']['priorDecision']   | Should -Be 'REVOKE'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# ES-022: first decisions / first-seen states never emit ReApproved
+# ---------------------------------------------------------------------------
+Describe 'ES-022: ReApproved stays empty for first decisions' {
+    It 'PENDING->APPROVE is NewlyDecided but not ReApproved' {
+        $sm = @{}
+        $pending = New-TestResolvedItem -ItemKey 'id-fp|ent-fp|src-fp' `
+            -HonestDecision 'Undecided' -IsAutoApproved $false -IsGenuineDecision $false
+        Update-SPEntitlementState -StateMap $sm -ResolvedItems @($pending) `
+            -InstanceId 'c-022a' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24' | Out-Null
+        $approved = New-TestResolvedItem -ItemKey 'id-fp|ent-fp|src-fp' -HonestDecision 'Approved'
+        $r = Update-SPEntitlementState -StateMap $sm -ResolvedItems @($approved) `
+            -InstanceId 'c-022b' -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
+        $r.NewlyDecided.Count | Should -Be 1
+        $r.ReApproved.Count   | Should -Be 0
+    }
+
+    It 'an item first seen already APPROVED emits neither list (reassignment-safe)' {
+        $sm = @{}
+        $approved = New-TestResolvedItem -ItemKey 'id-fa|ent-fa|src-fa' -HonestDecision 'Approved'
+        $r = Update-SPEntitlementState -StateMap $sm -ResolvedItems @($approved) `
+            -InstanceId 'c-022c' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24'
+        $r.NewlyDecided.Count | Should -Be 0
+        $r.ReApproved.Count   | Should -Be 0
+    }
+
+    It 'APPROVE->REVOKE (the opposite flip) does not emit ReApproved' {
+        $sm = @{}
+        $approved = New-TestResolvedItem -ItemKey 'id-ar|ent-ar|src-ar' -HonestDecision 'Approved'
+        Update-SPEntitlementState -StateMap $sm -ResolvedItems @($approved) `
+            -InstanceId 'c-022d' -InstanceDate '2026-06-24' -TodayLabel '2026-06-24' | Out-Null
+        $revoked = New-TestResolvedItem -ItemKey 'id-ar|ent-ar|src-ar' -HonestDecision 'Revoked'
+        $r = Update-SPEntitlementState -StateMap $sm -ResolvedItems @($revoked) `
+            -InstanceId 'c-022e' -InstanceDate '2026-06-25' -TodayLabel '2026-06-25'
+        $r.ReApproved.Count | Should -Be 0
     }
 }

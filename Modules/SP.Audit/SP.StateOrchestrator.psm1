@@ -95,6 +95,7 @@ function Invoke-SPStateTracking {
         Entitlement = @{
             StateMap = @{}; Total = 0; IsFirstRun = $true; FilePath = ''
             NewlyDecided = [System.Collections.Generic.List[object]]::new()
+            ReApproved = [System.Collections.Generic.List[object]]::new()
             DroppedFromScope = [System.Collections.Generic.List[object]]::new()
             StateSummary = @{ APPROVE = 0; REVOKE = 0; PENDING = 0; UNDECIDED = 0 }
             StateNew = 0; StateChanged = 0; PriorSnapshot = @{}; LastRunDate = ''
@@ -181,6 +182,7 @@ function Invoke-SPStateTracking {
     $totalEntNew = 0; $totalEntChanged = 0
     $totalRvNew = 0; $totalRvUpdated = 0
     $allNewlyDecided = [System.Collections.Generic.List[object]]::new()
+    $allReApproved   = [System.Collections.Generic.List[object]]::new()
     $instancesProcessed = 0
     $resolveFailures = 0
     $rosterFailures = 0
@@ -304,6 +306,9 @@ function Invoke-SPStateTracking {
             $totalEntNew += $entUpdate.StateNew
             $totalEntChanged += $entUpdate.StateChanged
             foreach ($nd in $entUpdate.NewlyDecided) { $allNewlyDecided.Add($nd) }
+            if ($entUpdate.ContainsKey('ReApproved')) {
+                foreach ($ra in $entUpdate.ReApproved) { $allReApproved.Add($ra) }
+            }
 
             # Update reviewer state
             $rvUpdate = Update-SPReviewerState -ReviewerMap $rvReviewerMap `
@@ -401,6 +406,7 @@ function Invoke-SPStateTracking {
             IsFirstRun       = -not $entRead.Exists
             FilePath         = $entPath
             NewlyDecided     = $allNewlyDecided
+            ReApproved       = $allReApproved
             DroppedFromScope = $allDropped
             StateSummary     = $stateSummary
             StateNew         = $totalEntNew

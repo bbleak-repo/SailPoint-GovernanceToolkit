@@ -304,6 +304,12 @@ summary{cursor:pointer;font-weight:600}
 <p>$totalIdentities distinct users reviewed | $totalItems entitlements tracked | 30 reviewers involved</p>
 </div>
 
+<!-- Section A: Campaign Summary (matches the V4b table the decision scraper reads Approved totals from) -->
+<div class="section"><h2>A. Campaign Summary</h2>
+<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Undecided</th></tr></thead>
+<tbody><tr><td>Q3 Quarterly Access Review</td><td>ACTIVE</td><td>$totalItems</td><td>$approvedCount</td><td class="s-red">$revokedCount</td><td>$pendingItems</td></tr></tbody></table>
+</div>
+
 <!-- Section B: Reviewer Accountability -->
 <div class="section"><h2>B. Reviewer Accountability</h2>
 <details><summary>Undecided ($pendingCount reviewers with undecided items)</summary>
@@ -334,8 +340,12 @@ $newScopeRowsHtml
 </div></body></html>
 "@
 
-    # Write file with UTF-8 no-BOM
-    $fileName = "Daily-Attestation-Evidence-Report-$dateStr.html"
+    # Write file with UTF-8 no-BOM. Name matches the PRODUCTION V4b generator output
+    # (daily-evidence-v4b-<yyyyMMdd-HHmmss>.html) so the scrapers' default -FilePattern
+    # and filename date parsing are exercised exactly as in production; the previous
+    # Daily-Attestation-Evidence-Report-* name matched only a legacy pattern the real
+    # generator never writes. Fixed 170000 timestamp keeps fixed-seed output reproducible.
+    $fileName = 'daily-evidence-v4b-{0}-170000.html' -f $reportDate.ToString('yyyyMMdd')
     $filePath = Join-Path $OutputPath $fileName
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($filePath, $html, $utf8NoBom)
