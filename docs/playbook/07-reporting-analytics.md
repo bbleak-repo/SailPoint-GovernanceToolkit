@@ -28,6 +28,8 @@ anyone who needs to know "what report do I give to whom?"
 | Daily Evidence Report (v4b) | `Invoke-SPDailyEvidenceReportV4b.ps1` | CISO, auditors, IAM ops | Daily | Fork of V4 with bug fixes: donut chart, N/A reviewer warning, item-level reviewer %. Same features as V4. CAUTION: its diff-based "Newly Decided" flags routine catch-up approvals on single-campaign daily runs -- use V4g/V8 (state DB) for authoritative newly-decided | HTML, JSON, JSONL |
 | Daily Evidence Report (v4g) | `Invoke-SPDailyEvidenceReportV4g.ps1` | CISO, auditors, IAM ops | Daily | V4 + persistent entitlement state DB (entitlement-state.jsonl). Authoritative Newly Decided (observed PENDING/UNDECIDED -> decided transitions only; first-seen-already-decided and reassignment re-approvals excluded), Re-Approved After Revoke register, honest APPROVE/REVOKE/PENDING/UNDECIDED states (idNowAutoApproved-aware) | HTML, JSON, JSONL |
 | Daily Evidence Trending (v7) | `Invoke-SPDailyEvidenceReportV7.ps1` | CISO, leadership, IAM ops | Weekly / on-demand | Calendar-day visualization: completion progression, decision distribution, reviewer heatmap, compliance accountability, source-level breakdown. Reads daily-metrics.jsonl (no API calls) | HTML |
+| Daily Evidence Trending (v7c) | `Invoke-SPDailyEvidenceReportV7c.ps1` | CISO, leadership, IAM ops | Weekly / on-demand | V7 + Reviewer Engagement Heatmap (C/P/M/U daily grid) + Entitlement State Summary (honest decision distribution). 15 charts. Reads daily-metrics.jsonl + optional rich cache (no API calls) | HTML |
+| First-Approval Timeline (v4f) | `Invoke-SPDailyEvidenceReportV4f.ps1` | Auditors, IAM ops | On-demand | V4e + per-item first-genuine-approval tracking across series window. Identifies WHEN grants were first approved. Read-only from rich cache (no API calls) | HTML, JSON |
 | Escalation Report | `Invoke-SPDeltaCertEscalate.ps1` | IAM ops, managers | Daily | Late reviewer escalation with org hierarchy, per-manager HTML, email routing CSV | HTML, CSV, TXT |
 | State-Powered Evidence (V8) | `Invoke-SPDailyEvidenceReportV8.ps1` | CISO, auditors, IAM ops | Daily / on-demand | 8-section state-driven report: entitlement state KPIs, privileged access breakdown by source, newly decided + re-approved after revoke, chronically unreviewed, dropped scope, reviewer engagement + weekly compliance + heatmap, campaign summary | HTML |
 | Governance Trend Dashboard | `Invoke-SPGovernanceTrendScrape.ps1` | Leadership, CISO | Monthly | Multi-report trend: KPI cards, decision distribution chart, completion/reviewer trend lines, month-over-month comparison, per-day detail. Scraped from existing HTML reports | HTML |
@@ -280,6 +282,73 @@ for backward compatibility.
 | `Audit/.cache/items-{campaignId}.jsonl` | V4/V4b | V4/V4b (cache) | Cached ISC items per campaign |
 | `Audit/.cache/items-{campaignId}.meta.json` | V4/V4b | V4/V4b (cache) | Cache metadata (TTL, status, seal) |
 | `Audit/Snapshots/{campaignId}/*.json` | V4/V4b | Diff engine | Per-campaign snapshot for cross-campaign diff |
+
+---
+
+## Daily Evidence Trending with Engagement Heatmap (V7c)
+
+V7c extends V7 with two visualization features, producing a 15-section HTML report:
+
+- **Charts 1-13:** identical to V7 (KPI banner, completion progression, decision distribution,
+  reviewer accountability, activity heatmap, projection, trending table/bars, risk matrix,
+  reviewer completion, source breakdown, scope waterfall, compliance accountability)
+- **Chart 14 -- Reviewer Engagement Heatmap:** daily C/P/M/U grid per reviewer, color-coded
+  (C=green, P=amber, M=red, U=gray), sorted by engagement score (worst first), with category
+  labels: Always Complete, Usually Complete, Inconsistent, Rarely Complete, Chronic Non-Compliance
+- **Chart 15 -- Entitlement State Summary:** honest decision distribution via SP.CampaignSeries
+  cross-instance analysis. Stacked bar + KPI tiles showing Genuinely Approved / Revoked /
+  Undecided (auto-approved), with per-series breakdown table and governance gap warning
+
+### C/P/M/U classification
+
+| Code | Meaning | Condition |
+|------|---------|-----------|
+| C | Completed | All items decided (pending = 0, decided > 0) |
+| P | Partial | Some decided, some pending |
+| M | Missed | Zero decisions, items still pending |
+| U | Undecided | Zero decisions, campaign force-closed (items auto-approved) |
+
+### Running V7c
+
+```powershell
+# Standard: last 14 days
+.\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -DaysBack 14
+
+# With campaign filter
+.\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -DaysBack 30 -CampaignNameContains 'AD Daily'
+
+# Show prerequisites
+.\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -ShowPrerequisites
+```
+
+**Pipeline:** V4b (daily capture) --> V7c (visualization). V7c also optionally reads the rich
+item cache (items-*.jsonl) for Chart 15's SP.CampaignSeries analysis.
+
+**Output:** `daily-evidence-v7c-{prefix}-{timestamp}.html`
+
+---
+
+## First-Approval Timeline (V4f)
+
+V4f extends V4e with per-item **first-genuine-approval tracking** across the series window.
+Same series-attestation engine (read-only from cache), same V4b visual chrome.
+
+- **WHEN** each currently-approved grant was first genuinely approved (which campaign instance)
+- **WHICH** grants became "newly approved" mid-window (transitioned from Undecided to Approved)
+- Campaign name filters (`-CampaignName`, `-CampaignNameStartsWith`, `-CampaignNameContains`)
+  for parity with V4b/V4g
+
+### Running V4f
+
+```powershell
+# First-approval timeline for series with 3+ instances
+.\Scripts\Invoke-SPDailyEvidenceReportV4f.ps1 -MinInstances 3
+
+# Filter to a recurring campaign
+.\Scripts\Invoke-SPDailyEvidenceReportV4f.ps1 -CampaignNameContains 'AD Daily'
+```
+
+**Output:** `daily-evidence-v4f-{timestamp}.html` (+ `.json` sidecar under `-OutputMode Both`)
 
 ---
 
@@ -903,7 +972,9 @@ and calls `Invoke-SPCachePopulate` to fetch from ISC before proceeding. Without
 |---|---|---|---|---|---|
 | `Invoke-SPDailyEvidenceReportV4b.ps1` | Daily evidence with KPI dashboard, reviewer accountability, revoked register, new scope | YES | YES | ISC token/config | HTML + daily-metrics.jsonl |
 | `Invoke-SPDailyEvidenceReportV4e.ps1` | Series-aware attestation delta with stable scope key. Honest newly-attested + decision transitions | NO | NO | Items cache (from V4b) | HTML |
-| `Invoke-SPDailyEvidenceReportV7.ps1` | Calendar-day trending visualization with charts | NO | NO | daily-metrics.jsonl (from V4b) | HTML |
+| `Invoke-SPDailyEvidenceReportV4f.ps1` | V4e + first-genuine-approval timeline per item. Tracks WHEN each grant was first approved across series window | NO | NO | Items cache (from V4b) | HTML, JSON |
+| `Invoke-SPDailyEvidenceReportV7.ps1` | Calendar-day trending visualization with charts (13 sections) | NO | NO | daily-metrics.jsonl (from V4b) | HTML |
+| `Invoke-SPDailyEvidenceReportV7c.ps1` | V7 + Reviewer Engagement Heatmap (C/P/M/U) + Entitlement State Summary (15 sections) | NO | NO | daily-metrics.jsonl + optional items cache | HTML |
 | `Invoke-SPDailyEvidenceReportV8.ps1` | State-powered report: entitlement + reviewer state, privileged breakdown, chronic unreviewed, weekly compliance | NO (auto-refresh from cache) | State files | State files or items cache | HTML |
 | `Update-SPStateFiles.ps1` | Populate/refresh entitlement-state.jsonl + reviewer-state.jsonl from cache | NO | State files | Items cache (from V4b) | JSONL state files |
 | `Invoke-SPGovernanceTrendScrape.ps1` | Monthly governance dashboard from existing HTML reports | NO | NO | HTML report files | HTML dashboard |

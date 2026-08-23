@@ -1589,6 +1589,50 @@ them `idNowAutoApproved`), reports `decisionsMade = decisionsTotal`, and sets ev
 exhaustive per-section tables and the full ISC-behaviour handling matrix, see
 [Reporting & Analytics](07-reporting-analytics.md).
 
+### `Invoke-SPDailyEvidenceReportV7c.ps1`
+**Purpose:** extends V7 with two visualization features -- the **Reviewer Engagement Heatmap**
+(C/P/M/U daily grid) and the **Entitlement State Summary** (honest decision distribution via
+SP.CampaignSeries). Output: `daily-evidence-v7c-{prefix}-{timestamp}.html`.
+
+- **15 chart sections** (V7 has 13) -- all V7 charts plus:
+  - Chart 14: Reviewer Engagement Heatmap -- daily C/P/M/U status per reviewer, sorted by
+    engagement score, with category labels (Always Complete through Chronic Non-Compliance)
+  - Chart 15: Entitlement State Summary -- stacked bar of genuinely Approved / Revoked /
+    Undecided (auto-approved) items, using SP.CampaignSeries honest classifier
+- **Prerequisite guard** -- clear "run V4b first" message when daily-metrics.jsonl is missing
+- **Data coverage warning** -- alerts when actual date span is less than half the requested window
+- Read-only: reads daily-metrics.jsonl + optional rich cache; never calls ISC API
+
+> **Pipeline:** `Invoke-SPDailyEvidenceReportV4b.ps1` (export from ISC, writes JSONL) -->
+> `Invoke-SPDailyEvidenceReportV7c.ps1` (visualize from JSONL). Run V4b daily while campaigns
+> are ACTIVE to accumulate multi-day data points.
+
+| Parameter | Description |
+|---|---|
+| `-DaysBack <n>` | Lookback window in days (default 7). |
+| `-StartDate` / `-EndDate` | Exact date range (yyyy-MM-dd), takes precedence over -DaysBack. |
+| `-CampaignNameContains` | Substring filter on campaign name (case-insensitive). |
+| `-Status` | ACTIVE, COMPLETED, or COMPLETING filter. |
+| `-OutputPath` | Output directory for HTML file. |
+| `-OutputMode` | Console / HTML / Both (default Both). |
+| `-IncludeSuspect` | Include suspect (pre-fix inflated) JSONL records. |
+| `-ShowPrerequisites` | Display the data pipeline prerequisites and exit. |
+
+```powershell
+# Last 14 days, all campaigns
+.\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -DaysBack 14
+
+# 30-day trend for Q2 campaigns
+.\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -DaysBack 30 -CampaignNameContains 'Q2'
+
+# Show what scripts to run before V7c can generate a report
+.\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -ShowPrerequisites
+```
+
+**Output:** `daily-evidence-v7c-{prefix}-{timestamp}.html`.
+**Related:** `Invoke-SPDailyEvidenceReportV7.ps1` (base, 13 charts),
+`Invoke-SPDailyEvidenceReportV4b.ps1` (upstream data source).
+
 ### `Invoke-SPDailyEvidenceReportV4c.ps1`
 **Purpose:** the **series-aware, honest "newly attested" decision-transition** report over the rich
 audit cache (output `daily-evidence-v4c-{timestamp}.html`). Where V4/V4b answer *"who hasn't finished
@@ -1731,6 +1775,43 @@ Parameters are identical to V4c:
 **Related:** `Invoke-SPDailyEvidenceReportV4c.ps1` (the analytics-look sibling -- same engine/data),
 `Invoke-SPDailyEvidenceReportV4b.ps1` (the chrome source V4e reproduces AND the data engine whose rich
 cache it reads).
+
+### `Invoke-SPDailyEvidenceReportV4f.ps1`
+**Purpose:** V4e plus the **Approved Items First-Approval Timeline** -- tracks WHEN each
+currently-approved grant was first genuinely approved across the series window, and WHICH
+grants became "newly approved" mid-window (output `daily-evidence-v4f-{timestamp}.html`).
+
+- Same series-attestation engine as V4c/V4e (read-only, no ISC API calls)
+- Adds per-item first-genuine-approval tracking: which instance first approved each grant
+- Shows mid-window "newly approved" grants that transitioned from Undecided to Approved
+- V4b visual family chrome (consistent look with V4/V4b reports)
+
+| Parameter | Description |
+|---|---|
+| `-SeriesName` | Override series stem for grouping (alias `-SeriesStem`). |
+| `-SeriesPattern` | Override temporal regex for series key extraction. |
+| `-CampaignName` | Exact campaign name filter. |
+| `-CampaignNameStartsWith` | Campaign name prefix filter. |
+| `-CampaignNameContains` | Campaign name substring filter (case-insensitive). |
+| `-SimilarityThreshold` | 0..1 string distance threshold (default 0 = OFF). |
+| `-MinInstances <n>` | Minimum instances for a series (default 2). |
+| `-Window <n>` | Lookback window (alias `-DaysBack`; default 0 = full). |
+| `-IncludeUnverified` | Include instances captured while COMPLETED (unverified provenance). |
+| `-CachePath` | Override cache directory (alias `-Path`). |
+| `-OutputPath` | Output directory. |
+| `-OutputMode` | Console / JSON / HTML / Both (default Both). |
+
+```powershell
+# First-approval timeline for all series with 3+ instances
+.\Scripts\Invoke-SPDailyEvidenceReportV4f.ps1 -MinInstances 3
+
+# Filter to a specific recurring campaign
+.\Scripts\Invoke-SPDailyEvidenceReportV4f.ps1 -CampaignNameContains 'AD Daily'
+```
+
+**Output:** `daily-evidence-v4f-{timestamp}.html` (plus `.json` sidecar under `-OutputMode Both`).
+**Related:** `Invoke-SPDailyEvidenceReportV4e.ps1` (base engine without first-approval timeline),
+`Invoke-SPDailyEvidenceReportV4b.ps1` (upstream cache writer).
 
 ### `Invoke-SPDailyEvidenceReportV4g.ps1`
 **Purpose:** **V4 with the persistent entitlement state database** -- the authoritative engine for
@@ -2320,6 +2401,93 @@ steps that already succeeded:
 > - **Retention deletes reports needed for compliance.** Review `Retention.ArchiveDays`
 >   and `Retention.DeleteDays` against your retention policy. Archive zips are kept
 >   for `DeleteDays` after archival, so effective retention is `ArchiveDays + DeleteDays`.
+
+---
+
+## 8. B2B guest governance
+
+Scripts for onboarding and monitoring B2B partner access via ISC. These create the
+governance layer (access profiles, roles, transforms, campaigns) without touching the
+Entra/Graph API -- ISC-side only.
+
+### `Invoke-SPB2BSetup.ps1`
+**Purpose:** **8-step idempotent B2B partner onboarding** -- builds the full ISC governance
+layer for a B2B partner domain: discovers entitlements, creates access profiles (standard +
+optional Tier-2 elevated), criteria-based roles, optional lookup transform, and optional
+certification campaign.
+
+- Idempotent: re-running skips already-created resources (matched by naming convention)
+- Certifier logic: never falls back to manager review (B2B guests have no manager identity)
+- Supports `-WhatIf` for dry-run validation before creating any ISC resources
+- Requires **admin-level** PAT permissions (not read-only audit scopes)
+
+| Parameter | Description |
+|---|---|
+| `-PartnerName` | Partner identifier (used in naming convention). **Required.** |
+| `-PartnerDomain` | Partner email domain (e.g. `contoso.com`). **Required.** |
+| `-SourceId` / `-SourceName` | ISC source for partner identities (one required). |
+| `-OwnerIdentityId` | IAM admin identity ID (owns created resources). **Required.** |
+| `-Tier2Apps` | Optional elevated app group names for Tier-2 access profile. |
+| `-GroupPrefix` | Entra group prefix (default `CLD-B2B`). |
+| `-IncludeTransform` | Deploy partner-domain lookup transform. |
+| `-CreateCampaign` | Create a certification campaign for the partner. |
+| `-CertifierIdentityId` | Certifier for the campaign (required with `-CreateCampaign`). |
+| `-CampaignDeadline` | Campaign deadline in days (default 14). |
+| `-TriggerAggregation` | Trigger entitlement aggregation if missing. |
+| `-Token` | Browser JWT or PAT override. |
+| `-OutputMode` | Console / HTML / Both (default Both). |
+| `-WhatIf` | Dry-run: show what would be created without making changes. |
+
+```powershell
+# Dry-run: preview what would be created for Contoso
+.\Scripts\Invoke-SPB2BSetup.ps1 -PartnerName 'Contoso' -PartnerDomain 'contoso.com' `
+    -SourceName 'Entra ID [source]' -OwnerIdentityId 'abc123' -WhatIf
+
+# Full setup with Tier-2 apps and a campaign
+.\Scripts\Invoke-SPB2BSetup.ps1 -PartnerName 'Contoso' -PartnerDomain 'contoso.com' `
+    -SourceName 'Entra ID [source]' -OwnerIdentityId 'abc123' `
+    -Tier2Apps 'SG-Salesforce-Admin','SG-ServiceNow-Admin' `
+    -IncludeTransform -CreateCampaign -CertifierIdentityId 'def456'
+```
+
+**Exit codes:** 0 = success, 1 = entitlements not found, 2 = parameter error, 3 = API error,
+4 = config error, 5 = partial (some steps failed).
+**Output:** HTML setup report + JSONL audit trail.
+
+### `Invoke-SPB2BHealthCheck.ps1`
+**Purpose:** **11-check ongoing verification** of the B2B governance layer -- validates source
+health, aggregation freshness, access profile completeness, role criteria, transform coverage,
+provisioning policies, naming convention compliance, and unassigned guests.
+
+- Read-only: PAT sufficient (no admin permissions needed)
+- Exit codes map to operational severity: 0 = all pass, 1 = warnings, 2 = failures
+- Designed for weekly scheduled runs to catch drift
+
+| Parameter | Description |
+|---|---|
+| `-SourceId` / `-SourceName` | ISC source for partner identities (one required). |
+| `-GroupPrefix` | Entra group prefix to validate (default `CLD-B2B`). |
+| `-RolePrefix` | Role naming prefix to validate (default `B2B-`). |
+| `-TransformName` | Expected transform name (default `B2B Partner Group Resolver`). |
+| `-AccountStalenessHours` | Account aggregation freshness threshold (default 24). |
+| `-EntitlementStalenessHours` | Entitlement aggregation freshness threshold (default 48). |
+| `-GuestSampleLimit` | Max guests to sample for zero-role check (default 250). |
+| `-Token` | Browser JWT or PAT override. |
+| `-Quiet` | Suppress console output (exit code only). |
+
+```powershell
+# Full health check for the Entra ID source
+.\Scripts\Invoke-SPB2BHealthCheck.ps1 -SourceName 'Entra ID [source]'
+
+# Scheduled weekly check with custom staleness thresholds
+.\Scripts\Invoke-SPB2BHealthCheck.ps1 -SourceId 'src-entra-001' `
+    -AccountStalenessHours 48 -EntitlementStalenessHours 72 -Quiet
+```
+
+**Exit codes:** 0 = all checks pass, 1 = warnings present, 2 = failures detected.
+**Output:** HTML health check report + JSONL evidence.
+**Related:** `Invoke-SPB2BSetup.ps1` (creates the resources this script validates),
+`docs/plans/B2B-SETUP-PLAN.md` (implementation plan).
 
 ---
 
