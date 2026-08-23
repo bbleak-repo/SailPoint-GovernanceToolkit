@@ -30,6 +30,87 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG; + lean v2)**, weekly digest, **AD-ISC-HR reconciliation export (non-expiring change-detection cache)**, **state tracking (V8 fast report + Update-SPStateFiles)**, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
+8. [B2B guest governance](#8-b2b-guest-governance) — `Invoke-SPB2BSetup`, `Invoke-SPB2BHealthCheck`
+
+---
+
+## Script Quick Reference (all 66 scripts)
+
+> Ctrl+F on the script name to jump to its detailed section below.
+> **Category:** EXPORT = calls ISC API | REPORT = generates output from local data |
+> TRANSFORM = derives local data from local data | UTILITY = setup/config/diagnostic |
+> SAMPLE = generates synthetic test data
+
+| Script | Cat. | Purpose | ISC? | Output |
+|--------|------|---------|------|--------|
+| `Invoke-GovernanceTest.ps1` | EXPORT | Runs certification campaign governance tests | YES | Console/JSON |
+| `Invoke-SP30DayManagerCertSim.ps1` | UTIL | 30-day MANAGER cert simulation against mock API | YES | JSONL |
+| `Invoke-SPAdaptiveReport.ps1` | REPORT | ~~DEPRECATED~~ -- replaced by CertTracker/TrendReport/Diff | YES | HTML/JSONL |
+| `Invoke-SPADDeltaCert.ps1` | EXPORT | Creates AD delta/full cert campaigns per manager group | YES | Console/JSONL |
+| `Invoke-SPB2BHealthCheck.ps1` | EXPORT | 11-check B2B guest governance layer verification | YES | HTML/JSONL |
+| `Invoke-SPB2BSetup.ps1` | EXPORT | 8-step idempotent B2B partner onboarding (ISC-side) | YES | Console/JSONL |
+| `Invoke-SPCacheDiagnostic.ps1` | UTIL | Comprehensive cache integrity scanner (all cache types) | NO | Console/Log |
+| `Invoke-SPCacheValidate.ps1` | UTIL | Validates snapshot/items-cache JSON for completeness | NO | Console/JSON |
+| `Invoke-SPCampaignAudit.ps1` | EXPORT | Post-campaign audit reports (HTML, text, JSONL) | YES | HTML/JSONL |
+| `Invoke-SPCampaignClose.ps1` | EXPORT | Finds campaigns; optionally force-completes (-SetCompleted) | OPT | Console/JSONL |
+| `Invoke-SPCampaignDiff.ps1` | EXPORT | Day-over-day snapshot diff (completion + scope changes) | YES | HTML/CSV |
+| `Invoke-SPCampaignSearch.ps1` | EXPORT | Unified campaign search (keywords, metrics, reviewer, source) | YES | Console/HTML/CSV |
+| `Invoke-SPCampaignTrendReport.ps1` | REPORT | KPI trend report for recurring campaigns from trend JSONL | NO | HTML |
+| `Invoke-SPCertTracker.ps1` | EXPORT | Executive cert progress tracker (pipeline board) | YES | HTML |
+| `Invoke-SPDailyEvidenceReport.ps1` | EXPORT | Daily evidence v1: KPI dashboard + domino tracker | YES | HTML |
+| `Invoke-SPDailyEvidenceReportV2.ps1` | EXPORT | Daily evidence v2: lean leadership-grade attestation | YES | HTML |
+| `Invoke-SPDailyEvidenceReportV3.ps1` | EXPORT | Daily evidence v3: day-over-day delta with scope-diff | YES | HTML |
+| `Invoke-SPDailyEvidenceReportV4.ps1` | EXPORT | Daily evidence v4: accountability + delta-aware evidence | YES | HTML |
+| `Invoke-SPDailyEvidenceReportV4b.ps1` | EXPORT | V4 fork: metrics JSONL for downstream viz (V7/V7c) | YES | HTML/JSONL |
+| `Invoke-SPDailyEvidenceReportV4c.ps1` | REPORT | Series attestation delta (read-only from rich cache) | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV4d.ps1` | REPORT | ~~DEPRECATED~~ -- prefer V4e | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV4e.ps1` | REPORT | Unified series attestation delta (V4b chrome) | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV4f.ps1` | REPORT | V4e + first-approval timeline across series window | NO | HTML/JSON |
+| `Invoke-SPDailyEvidenceReportV4g.ps1` | EXPORT | V4 + persistent entitlement state DB (honest NewlyDecided) | YES | HTML/JSONL |
+| `Invoke-SPDailyEvidenceReportV5.ps1` | REPORT | Trend-aware with 14 multi-day chart styles | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV6.ps1` | REPORT | Pure visualizer from daily-metrics.jsonl (10 sections) | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV7.ps1` | REPORT | Calendar-day visualizer (13 charts) | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV7c.ps1` | REPORT | V7 + engagement heatmap + entitlement state (15 charts) | NO | HTML |
+| `Invoke-SPDailyEvidenceReportV8.ps1` | REPORT | State-powered report (-AutoFetch), <30s render, 8 sections | NO | HTML |
+| `Invoke-SPDailyOrchestrator.ps1` | EXPORT | Full daily governance workflow (12-step coordinator) | YES | Console/JSONL |
+| `Invoke-SPDataQualityReport.ps1` | EXPORT | Data quality: orphans, identity attributes, source health | YES | HTML |
+| `Invoke-SPDecisionScrape.ps1` | XFORM | Scrapes evidence HTMLs for revoked/new-scope decisions | NO | HTML |
+| `Invoke-SPDeltaCertEscalate.ps1` | EXPORT | Escalates stale certs by reassigning up org tree | YES | HTML/JSONL |
+| `Invoke-SPDeltaReport.ps1` | EXPORT | Daily delta cert report: grants/revocations in time window | YES | HTML/JSONL |
+| `Invoke-SPDisconnectedAppBatch.ps1` | EXPORT | Batch orchestrator for disconnected app certs | YES | HTML/JSONL |
+| `Invoke-SPDisconnectedAppCert.ps1` | EXPORT | Full disconnected app cert pipeline (validate/snapshot/delta) | YES | HTML/JSONL |
+| `Invoke-SPDisconnectedAppRegistry.ps1` | UTIL | Manages disconnected app registrations in settings.json | NO | Console/JSON |
+| `Invoke-SPEntitlementHistory.ps1` | REPORT | Per-entitlement decision timeline across N snapshots | NO | HTML/CSV |
+| `Invoke-SPEscalationMailer.ps1` | UTIL | Sends personalized escalation emails via SMTP | NO | CSV |
+| `Invoke-SPGovernanceHealthCheck.ps1` | EXPORT | 6-dimension health check with pass/fail grades | YES | HTML |
+| `Invoke-SPGovernanceHeartbeat.ps1` | EXPORT | Lightweight high-frequency campaign KPI capture | YES | JSONL/HTML |
+| `Invoke-SPGovernanceMetrics.ps1` | EXPORT | Captures governance KPIs to time-series store | YES | JSONL/HTML |
+| `Invoke-SPGovernanceReport.ps1` | EXPORT | Full governance report package (audit/policy/quality) | YES | HTML/CSV/JSON |
+| `Invoke-SPGovernanceTrendScrape.ps1` | XFORM | Scrapes evidence HTMLs for monthly governance trend | NO | HTML |
+| `Invoke-SPHierarchicalReport.ps1` | EXPORT | Hierarchical leadership cert rollup (per-leader HTML) | YES | HTML |
+| `Invoke-SPIscReconciliation.ps1` | EXPORT | ISC identity+entitlement export for AD/HR reconciliation | YES | JSON/CSV |
+| `Invoke-SPOrgTreePreview.ps1` | EXPORT | ASCII org-tree preview for a campaign's certifiers | YES | Console |
+| `Invoke-SPPendingReviewerScrape.ps1` | XFORM | Scrapes evidence HTMLs for chronic-pending reviewer trends | NO | HTML |
+| `Invoke-SPReportDistribution.ps1` | EXPORT | Generates and distributes leadership reports via SMTP | YES | HTML/JSONL |
+| `Invoke-SPResilienceProbe.ps1` | UTIL | Resilience probe: verifies toolkit survives API failures | YES | Console |
+| `Invoke-SPRetention.ps1` | UTIL | Log and report retention cleanup (archive + delete) | NO | Console/JSON |
+| `Invoke-SPScheduledCampaign.ps1` | EXPORT | Runs campaigns from saved templates on cadence | YES | Console/JSON |
+| `Invoke-SPSdkCampaignTemplates.ps1` | EXPORT | Lists/inspects ISC campaign templates and schedules | YES | Console/JSON |
+| `Invoke-SPSdkWorkflows.ps1` | EXPORT | Lists/inspects ISC workflows and execution history | YES | Console/JSON |
+| `Invoke-SPSdkWorkItems.ps1` | EXPORT | Lists ISC work items (open/completed counts) | YES | Console/JSON |
+| `Invoke-SPTrendBackfill.ps1` | XFORM | Backfills campaign trend JSONL from existing snapshots | NO | JSONL |
+| `Invoke-SPWeeklyDigest.ps1` | EXPORT | Weekly governance digest (campaigns, health, risk, reviewers) | YES | HTML/JSON |
+| `New-SPDailyEvidenceV5Sample.ps1` | SAMPLE | Generates V5 sample report with four viz styles | NO | HTML |
+| `New-SPDisconnectedAppSnapshotData.ps1` | SAMPLE | Generates deterministic disconnected-app CSV test data | NO | CSV |
+| `New-SPMockDailyReports.ps1` | SAMPLE | Generates 15 realistic daily evidence HTMLs for testing | NO | HTML |
+| `New-SPSampleDashboard.ps1` | SAMPLE | Generates governance trend dashboard with synthetic data | NO | HTML |
+| `New-SPSampleEscalation.ps1` | SAMPLE | Generates sample escalation reports across 5 tiers | NO | HTML |
+| `New-SPVault.ps1` | UTIL | One-time encrypted credential vault setup | NO | Console |
+| `Show-SPDashboard.ps1` | UTIL | Launches WPF interactive governance dashboard (Windows) | NO | GUI |
+| `Test-SPConnectivity.ps1` | UTIL | Quick smoke test for ISC connectivity and OAuth | YES | Console |
+| `Update-SPStateFiles.ps1` | XFORM | Updates entitlement/reviewer state JSONL from rich cache | NO | JSONL |
+
+**Totals:** 35 EXPORT (call ISC) | 12 REPORT (local data to HTML) | 5 TRANSFORM (local to local) | 9 UTILITY | 5 SAMPLE
 
 ---
 
