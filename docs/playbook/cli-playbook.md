@@ -1760,10 +1760,22 @@ instances in `entitlement-state.jsonl` with four honest states: `APPROVE`, `REVO
   daily-metrics.jsonl is always 0); prior-snapshot selection only considers campaigns that started
   BEFORE the current one, so a run containing both today's and yesterday's instances can never diff
   backwards.
+- **Crash-safe on long runs.** State tracking checkpoints both state files every 10 instances
+  (with a `[checkpoint]` heartbeat showing count + elapsed minutes); a killed multi-hour
+  month-scale run loses at most the last batch, and the restart skips already-processed terminal
+  instances. Applies to every state-tracking caller (V4g, V8 auto-refresh, Update-SPStateFiles).
 
 **Cross-check:** `Invoke-SPDailyEvidenceReportV4f.ps1` computes first-genuine-approval timelines from
 the cache through an independent engine -- run both over the same window and the "newly
-approved/attested" sets should agree; disagreement localizes a bug.
+approved/attested" sets should agree; disagreement localizes a bug. NOTE: V4f is series-engine
+based, so it takes the common campaign filters (`-CampaignName` / `-CampaignNameStartsWith` /
+`-CampaignNameContains`, added for parity) plus `-DaysBack` as an alias of `-Window` (newest N
+INSTANCES per series, not calendar days). Its `-SeriesName` is NOT a filter -- it is an override
+guard that forces a stem onto every cached campaign.
+
+```powershell
+.\Scripts\Invoke-SPDailyEvidenceReportV4f.ps1 -CampaignNameStartsWith 'daily attestation' -DaysBack 18
+```
 
 ```powershell
 # Daily run (API capture + state DB update + HTML)
@@ -1908,7 +1920,10 @@ aggregation keys (provenance is noted in the report header instead).
 
 It renders a self-contained inline-SVG dashboard (no JavaScript -- Word/email safe):
 1. **Chronic-Pending bars** -- per reviewer, appeared pending in X of N report days (percentage),
-   with optional `-ShowTrend` indicators (Improving / Lagging / Inconsistent / Steady / Recently flagged).
+   with optional `-ShowTrend` indicators (Improving / Lagging / Chronic / Inconsistent / Steady /
+   Recently flagged). An ACTIVE trailing streak (still pending on the window's last day, 2+ days
+   running) always reads Lagging -- 4 outstanding days becoming 5 is deterioration, even when a
+   saturated window's half-vs-half rates are flat -- and pending EVERY window day reads Chronic.
 2. **Reviewer-by-Date heatmap** -- a red cell wherever a reviewer was pending that day.
 3. **Missed-Review Streak flags** -- reviewers pending N **consecutive REPORT days** (threshold 2 when
    fewer than 3 reports are in scope, otherwise 3). Weekends/holidays with no report do NOT reset a
@@ -1948,10 +1963,20 @@ on the wrong day. The decision-day axis can therefore start before the first rep
 the truthful timeline. The approved campaign-to-date total is scraped from the campaign summary
 table when present.
 
-Dashboard: KPI tiles (distinct revoked / distinct new scope / approved campaign-to-date / net change /
-report days / decision days / averages), three adaptive charts on one aligned date axis (combined
-paired red-green, revoked-only, new-scope-only) plus a raw per-day numbers table, the revoked
-register (default cap 500 rows, `-Top` overrides, truncation disclosed), top revoked
+Dashboard: KPI tiles (distinct revoked / distinct new scope / approved campaign-to-date /
+re-approved flops / net change / report days / decision days / averages), three adaptive charts on
+one aligned date axis (combined paired red-green, revoked-only, new-scope-only) plus a raw per-day
+numbers table with CUMULATIVE columns that reconcile daily first-sightings back to the source
+reports' register counts (a report showing 35 the day after 28 = 7 first-sightings that day). Every
+report day appears on the chart axis -- a zero bar means the report ran and nothing was decided;
+only days with neither a report nor decision activity are absent. Also includes a
+**Re-Approved After Revoke (flops)** table (grants revoked earlier in the window and approved again
+later -- also the explanation when a Revoked register count SHRINKS between two reports), a
+**Re-Revoked Grants** table (the same grant revoked on more than one decision day -- distinct revoke
+events are never de-duplicated, and repeats signal access that came back after a revoke), an
+intra-report duplicate-row data-quality warning (the same key twice in ONE file suggests upstream
+cache duplication; cross-day repetition is normal), the
+revoked register (default cap 500 rows, `-Top` overrides, truncation disclosed), top revoked
 entitlements/identities, new-scope register, and a per-source breakdown. "Newly Decided" approvals of
 pre-existing items are intentionally excluded from New Scope and Net Change -- that signal belongs to
 the V4g/V8 state pipeline.

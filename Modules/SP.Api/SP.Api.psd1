@@ -11,7 +11,7 @@
     # Module author and description
     Author            = 'SailPoint ISC Governance Toolkit'
     CompanyName       = 'Internal'
-    Description       = 'SailPoint ISC Governance Toolkit - API Client Module. Provides rate-limited, retry-capable REST client and campaign/certification/decision management functions for the SailPoint ISC v3 API.'
+    Description       = 'SailPoint ISC Governance Toolkit - API Client Module. Provides rate-limited, retry-capable REST client plus campaign, certification, decision, source, and access-governance functions for the SailPoint ISC v3 API.'
     Copyright         = '(c) 2026. All rights reserved.'
 
     # Dependency: SP.Core must be imported before SP.Api (caller handles import order).
@@ -24,6 +24,8 @@
         'SP.Campaigns.psm1'
         'SP.Certifications.psm1'
         'SP.Decisions.psm1'
+        'SP.Sources.psm1'
+        'SP.AccessGovernance.psm1'
     )
 
     # Public functions exported by this module
@@ -52,6 +54,23 @@
         'Invoke-SPReassign'
         'Invoke-SPReassignAsync'
         'Invoke-SPSignOff'
+
+        # SP.Sources
+        'Get-SPSource'
+        'Get-SPSources'
+        'Get-SPEntitlements'
+        'Start-SPAccountAggregation'
+        'Start-SPEntitlementAggregation'
+        'Get-SPProvisioningPolicies'
+
+        # SP.AccessGovernance
+        'New-SPAccessProfile'
+        'Get-SPAccessProfiles'
+        'New-SPRole'
+        'Get-SPRoles'
+        'New-SPTransform'
+        'Set-SPTransform'
+        'Get-SPTransforms'
     )
 
     # Do not export variables or aliases from nested modules

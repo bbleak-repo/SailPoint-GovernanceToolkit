@@ -47,6 +47,17 @@
 .PARAMETER SeriesPattern
     OVERRIDE GUARD: a user-supplied temporal regex used instead of the built-in
     ladder. Passed through to the reader only when bound.
+.PARAMETER CampaignName
+    Common campaign filter (parity with V4/V4b/V4g): keep only series whose stem or
+    any instance campaign name EQUALS this (case-insensitive). Unlike -SeriesName --
+    an override guard that forces a stem onto every cached campaign -- this filters
+    WHICH derived series are reported.
+.PARAMETER CampaignNameStartsWith
+    Common campaign filter: keep series whose stem or any instance campaign name
+    STARTS WITH this prefix (case-insensitive).
+.PARAMETER CampaignNameContains
+    Common campaign filter: keep series whose stem or any instance campaign name
+    CONTAINS this substring (case-insensitive).
 .PARAMETER SimilarityThreshold
     OPT-IN fuzzy near-match (0..1). Default 0 = OFF (exact-match grouping only).
     When > 0, near-identical series stems are consolidated via Levenshtein
@@ -88,6 +99,9 @@
 .EXAMPLE
     .\Invoke-SPDailyEvidenceReportV4f.ps1 -Window 2 -OutputMode Console
     # Narrow each series to its two newest instances (today vs yesterday single-day diff).
+.EXAMPLE
+    .\Invoke-SPDailyEvidenceReportV4f.ps1 -CampaignNameStartsWith 'daily attestation' -DaysBack 18
+    # Only the 'daily attestation' series, newest 18 instances (-DaysBack aliases -Window).
 .NOTES
     Script:  Invoke-SPDailyEvidenceReportV4f.ps1
     Version: 1.0.0
@@ -100,6 +114,15 @@ param(
 
     [Parameter()]
     [string]$SeriesPattern,
+
+    [Parameter()]
+    [string]$CampaignName,
+
+    [Parameter()]
+    [string]$CampaignNameStartsWith,
+
+    [Parameter()]
+    [string]$CampaignNameContains,
 
     [Parameter()]
     [ValidateRange(0, 1)]
@@ -369,6 +392,37 @@ if ($SimilarityThreshold -gt 0 -and $MinInstances -gt 1) {
     $seriesList = @($seriesList | Where-Object { @($_.Instances).Count -ge $MinInstances })
     if ($seriesList.Count -ne $beforeReFilter) {
         Write-Host "    Series after MinInstances=$MinInstances re-filter: $($seriesList.Count)" -ForegroundColor DarkGray
+    }
+}
+
+#endregion
+
+#region Step 2a: Common campaign-name filters (parity with V4/V4b/V4g)
+
+# -CampaignName / -CampaignNameStartsWith / -CampaignNameContains narrow WHICH derived
+# series are reported. This is deliberately different from -SeriesName, which is an
+# override guard that FORCES a stem onto every cached campaign (grouping, not
+# filtering) -- passing a campaign string there lumps unrelated series together. A
+# series is kept when its stem, normalized stem, or ANY instance's raw campaign name
+# matches; case-insensitive throughout.
+if ($CampaignName -or $CampaignNameStartsWith -or $CampaignNameContains) {
+    $beforeNameFilter = $seriesList.Count
+    $seriesList = @($seriesList | Where-Object {
+        $names = @([string]$_.SeriesStem, [string]$_.NormalizedStem) + @(@($_.Instances) | ForEach-Object { [string]$_.CampaignName })
+        $keep = $false
+        foreach ($n in $names) {
+            if ([string]::IsNullOrWhiteSpace($n)) { continue }
+            if ($CampaignName -and ($n -ieq $CampaignName)) { $keep = $true; break }
+            if ($CampaignNameStartsWith -and $n.StartsWith($CampaignNameStartsWith, [System.StringComparison]::OrdinalIgnoreCase)) { $keep = $true; break }
+            if ($CampaignNameContains -and ($n.IndexOf($CampaignNameContains, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) { $keep = $true; break }
+        }
+        $keep
+    })
+    Write-Host "    Campaign-name filter: $beforeNameFilter -> $($seriesList.Count) series" -ForegroundColor DarkGray
+    if ($seriesList.Count -eq 0) {
+        Write-Host '  No cached series match the campaign-name filter. Available stems:' -ForegroundColor Yellow
+        foreach ($s in @($seriesRes.Data.Series)) { Write-Host "    - $([string]$s.SeriesStem)" -ForegroundColor DarkGray }
+        exit 0
     }
 }
 

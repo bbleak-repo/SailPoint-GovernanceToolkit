@@ -221,7 +221,13 @@ function Get-ReviewerTrend {
     # 5-day example: first half = days 1-2, second half = days 3-5.
     #   Alice pending Mon,Tue,Wed but clear Thu,Fri -> first 2/2=100%, second 1/3=33% -> Improving
     #   Bob clear Mon,Tue but pending Wed,Thu,Fri   -> first 0/2=0%,   second 3/3=100% -> Lagging
-    #   Carol pending all 5                          -> first 2/2=100%, second 3/3=100% -> Steady
+    #   Carol pending all 5                          -> Chronic (all days; NOT "Steady")
+    #
+    # ACTIVE TRAILING STREAK overrides the half-split delta: a reviewer whose
+    # consecutive-pending run is still alive on the window's last day is getting worse
+    # RIGHT NOW -- 4 outstanding days becoming 5 is Lagging, not Steady, even though a
+    # saturated window reads 100% -> 100% as "no change". Pending on EVERY window day
+    # escalates to Chronic.
     #
     # "Recently flagged": if the reviewer's total outstanding count equals the MinMisses
     # threshold, they just crossed the visibility line. Don't label them Lagging/Improving
@@ -281,6 +287,20 @@ function Get-ReviewerTrend {
     $transitionThreshold = [int][math]::Floor($totalDays / 2)
     if ($transitions -ge $transitionThreshold -and $transitions -ge 2) {
         return @{ Direction = 'Inconsistent'; Color = '#e67e22'; Symbol = '~' }
+    }
+
+    # Active trailing streak: consecutive pending report days ending at the window's
+    # LAST day. Still-running streak >= 2 -> deteriorating now, regardless of what the
+    # half-split delta says; pending every window day -> Chronic.
+    $trailingStreak = 0
+    for ($ti = $totalDays - 1; $ti -ge 0; $ti--) {
+        if ($reviewerDates.Contains($SortedDateLabels[$ti])) { $trailingStreak++ } else { break }
+    }
+    if ($trailingStreak -eq $totalDays) {
+        return @{ Direction = 'Chronic'; Color = '#c0392b'; Symbol = '!' }
+    }
+    if ($trailingStreak -ge 2) {
+        return @{ Direction = 'Lagging'; Color = '#c0392b'; Symbol = '^' }
     }
 
     $firstRate  = if ($firstHalfDays.Count -gt 0) { $firstCount / $firstHalfDays.Count } else { 0 }
@@ -700,9 +720,10 @@ if ($OutputMode -in @('HTML', 'Both')) {
         }
         $improving    = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Improving' }).Count
         $lagging      = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Lagging' }).Count
+        $chronic      = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Chronic' }).Count
         $inconsistent = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Inconsistent' }).Count
         $steady       = @($trendDataMap.Values | Where-Object { $_.Direction -eq 'Steady' }).Count
-        Write-Host "  Trend analysis: $improving improving, $lagging lagging, $inconsistent inconsistent, $steady steady" -ForegroundColor DarkGray
+        Write-Host "  Trend analysis: $improving improving, $lagging lagging, $chronic chronic, $inconsistent inconsistent, $steady steady" -ForegroundColor DarkGray
     }
 
     $barSvg  = New-SvgChronicBars -Rows $shown -Total $total -TrendData $trendDataMap -ExcludedCount $excludedByMinMisses -MinMisses $MinMisses

@@ -289,6 +289,13 @@ function Get-SPConfigDefaults {
             }
             ConfidenceScoreGrade = @{ A = 90; B = 80; C = 70; D = 60 }
         }
+        B2B = @{
+            GroupPrefix             = 'CLD-B2B'
+            CertifierIdentityId     = ''
+            DefaultCertDeadlineDays = 30
+            DefaultLeadershipTitles = @('Director', 'VP', 'Chief')
+            AutoCreateCampaign      = $false
+        }
     }
 }
 

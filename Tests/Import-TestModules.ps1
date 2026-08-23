@@ -39,7 +39,8 @@ function Import-SPTestModules {
     .PARAMETER Core
         Imports SP.Config, SP.Logging, SP.Vault, SP.Auth.
     .PARAMETER Api
-        Imports SP.ApiClient, SP.Campaigns, SP.Certifications, SP.Decisions.
+        Imports SP.ApiClient, SP.Campaigns, SP.Certifications, SP.Decisions,
+        SP.Sources, SP.AccessGovernance.
     .PARAMETER Audit
         Imports SP.AuditQueries, SP.AuditReportCore, SP.AuditAnalytics,
         SP.AuditReportHtml, SP.AuditOperations.
@@ -100,6 +101,8 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Campaigns.psm1')      -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Certifications.psm1') -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Decisions.psm1')      -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Sources.psm1')        -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Api\SP.AccessGovernance.psm1') -Force -DisableNameChecking
     }
     if ($Audit) {
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditQueries.psm1')    -Force -DisableNameChecking

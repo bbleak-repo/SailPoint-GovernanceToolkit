@@ -19,6 +19,12 @@
     day that listed them. Without this, a 30-day window counted every item once per day it
     survived in and put decisions on the report-file date instead of the real decision date.
 
+    The dedupe NEVER collapses distinct revoke events: the key includes the Decision Date, so
+    a grant revoked on two different days counts twice and is surfaced in the Re-Revoked
+    Grants register (revoked access that came back is a governance signal, not noise). A
+    duplicate of the same key WITHIN one report file is flagged as a data-quality warning
+    (possible upstream cache duplication) rather than silently collapsed.
+
     It then renders a self-contained HTML dashboard (inline SVG, no JavaScript -- Word/email safe):
       1. Decision Activity Summary -- KPI tiles (total revoked, new scope, approved campaign-to-date
          when the campaign summary table is present, net change, averages).
@@ -433,9 +439,23 @@ $allNewScope = New-Object System.Collections.Generic.List[object]
 $seenRevoked  = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
 $seenNewScope = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
 
+# The dedupe key includes the item's own DecisionDate, so DISTINCT revoke/approve
+# EVENTS (different decision dates) are NEVER collapsed -- a grant revoked twice in
+# the window counts twice, on both days (and is surfaced in the Re-Revoked Grants
+# register below). Only identical re-listings of the same event across the daily
+# cumulative snapshots collapse. A duplicate of the same key WITHIN ONE report file
+# is a different animal -- upstream cache/render duplication -- and is counted as a
+# data-quality warning instead of being silently collapsed.
+$intraReportDupes = 0
+$intraReportDupeExamples = New-Object System.Collections.Generic.List[string]
 foreach ($rep in $reports) {
+    $seenThisReport = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($item in $rep.Revoked) {
         $key = "$($item.Identity)|$($item.AccessName)|$($item.Source)|$($item.Reviewer)|$($item.DecisionDate)"
+        if (-not $seenThisReport.Add("R|$key")) {
+            $intraReportDupes++
+            if ($intraReportDupeExamples.Count -lt 5) { $intraReportDupeExamples.Add("$($rep.File): REVOKED $($item.Identity) / $($item.AccessName)") }
+        }
         if (-not $seenRevoked.Add($key)) { continue }
         $allRevoked.Add([pscustomobject]@{
             Date          = (Resolve-DecisionDay -RawDecisionDate $item.DecisionDate -ReportDate $rep.Date).ToString('yyyy-MM-dd')
@@ -448,6 +468,10 @@ foreach ($rep in $reports) {
     }
     foreach ($item in $rep.NewScope) {
         $key = "$($item.Identity)|$($item.AccessName)|$($item.Source)|$($item.Reviewer)|$($item.DecisionDate)"
+        if (-not $seenThisReport.Add("N|$key")) {
+            $intraReportDupes++
+            if ($intraReportDupeExamples.Count -lt 5) { $intraReportDupeExamples.Add("$($rep.File): NEW SCOPE $($item.Identity) / $($item.AccessName)") }
+        }
         if (-not $seenNewScope.Add($key)) { continue }
         $allNewScope.Add([pscustomobject]@{
             Date       = (Resolve-DecisionDay -RawDecisionDate $item.DecisionDate -ReportDate $rep.Date).ToString('yyyy-MM-dd')
@@ -465,8 +489,15 @@ $dailyRevoked  = @{}
 $dailyNewScope = @{}
 foreach ($it in $allRevoked)  { if (-not $dailyRevoked.ContainsKey($it.Date))  { $dailyRevoked[$it.Date]  = 0 }; $dailyRevoked[$it.Date]++ }
 foreach ($it in $allNewScope) { if (-not $dailyNewScope.ContainsKey($it.Date)) { $dailyNewScope[$it.Date] = 0 }; $dailyNewScope[$it.Date]++ }
-$activityLabels = @(@($dailyRevoked.Keys) + @($dailyNewScope.Keys) | Sort-Object -Unique)
-$activityDays = $activityLabels.Count
+# Chart/table axis: every decision day PLUS every report day. A report day with no
+# decision activity renders as a zero bar/row -- "the report ran and nothing was
+# decided that day" is evidence, and its absence read as missing days. Weekend/
+# holiday gaps with neither a report nor activity stay absent. $activityDays (the
+# averages' denominator and the Decision Days KPI) still counts only days with
+# actual activity, so quiet report days do not dilute the averages.
+$decisionDayLabels = @(@($dailyRevoked.Keys) + @($dailyNewScope.Keys) | Sort-Object -Unique)
+$activityDays = $decisionDayLabels.Count
+$activityLabels = @(($decisionDayLabels + $dateLabels) | Sort-Object -Unique)
 
 $totalRevoked  = $allRevoked.Count
 $totalNewScope = $allNewScope.Count
@@ -558,6 +589,65 @@ $sourceRows = @($sourceGroups.GetEnumerator() | ForEach-Object {
 } | Sort-Object -Property @{Expression='Revoked';Descending=$true}, @{Expression='Source'})
 
 # ---------------------------------------------------------------------------
+# Re-approved flops: the same grant (identity|access|source, reviewer-agnostic)
+# REVOKED earlier in the window and approved again later. The source registers are
+# CURRENT-STATE snapshots, so on re-approval an item silently LEAVES the Revoked
+# register (its count can shrink between two reports) and re-enters New Scope with a
+# fresh decision date. Surfaced explicitly: a shrinking Revoked count is otherwise
+# unexplainable, and re-grants of revoked access are the primary re-grant signal.
+# Only flops whose revoke AND re-approval both fall inside the window are detectable.
+# ---------------------------------------------------------------------------
+$revokeDayByGrant = @{}
+foreach ($it in $allRevoked) {
+    $gk = "$($it.Identity)|$($it.AccessName)|$($it.Source)".ToLowerInvariant()
+    if (-not $revokeDayByGrant.ContainsKey($gk) -or ([string]$it.Date) -lt ([string]$revokeDayByGrant[$gk])) { $revokeDayByGrant[$gk] = [string]$it.Date }
+}
+$reApprovedFlops = New-Object System.Collections.Generic.List[object]
+foreach ($it in $allNewScope) {
+    $gk = "$($it.Identity)|$($it.AccessName)|$($it.Source)".ToLowerInvariant()
+    if ($revokeDayByGrant.ContainsKey($gk) -and (([string]$revokeDayByGrant[$gk]) -lt ([string]$it.Date))) {
+        $reApprovedFlops.Add([pscustomobject]@{
+            Identity      = $it.Identity
+            AccessName    = $it.AccessName
+            Source        = $it.Source
+            Reviewer      = $it.Reviewer
+            RevokedDay    = [string]$revokeDayByGrant[$gk]
+            ReApprovedDay = [string]$it.Date
+        })
+    }
+}
+$reApprovedFlops = @($reApprovedFlops | Sort-Object -Property @{Expression='ReApprovedDay';Descending=$true}, @{Expression='Identity'})
+
+# ---------------------------------------------------------------------------
+# Re-revoked grants: the same grant (identity|access|source) revoked on MORE THAN
+# ONE distinct decision day in the window. Revoke events are never de-duplicated
+# across decision dates, so each event is already counted -- this register makes the
+# pattern visible: revoked access that came back (failed remediation, re-provisioning,
+# or a revoke -> approve -> revoke flip) and had to be revoked again.
+# ---------------------------------------------------------------------------
+$revokesByGrant = @{}
+foreach ($it in $allRevoked) {
+    $gk = "$($it.Identity)|$($it.AccessName)|$($it.Source)".ToLowerInvariant()
+    if (-not $revokesByGrant.ContainsKey($gk)) { $revokesByGrant[$gk] = New-Object System.Collections.Generic.List[object] }
+    $revokesByGrant[$gk].Add($it)
+}
+$reRevokedGrants = New-Object System.Collections.Generic.List[object]
+foreach ($gk in $revokesByGrant.Keys) {
+    $events = @($revokesByGrant[$gk] | Sort-Object Date)
+    $distinctDays = @($events | ForEach-Object { [string]$_.Date } | Sort-Object -Unique)
+    if ($distinctDays.Count -lt 2) { continue }
+    $reRevokedGrants.Add([pscustomobject]@{
+        Identity    = $events[0].Identity
+        AccessName  = $events[0].AccessName
+        Source      = $events[0].Source
+        TimesRevoked = $distinctDays.Count
+        RevokeDays  = ($distinctDays -join ', ')
+        Reviewers   = (@($events | ForEach-Object { [string]$_.Reviewer } | Where-Object { $_ } | Sort-Object -Unique) -join ', ')
+    })
+}
+$reRevokedGrants = @($reRevokedGrants | Sort-Object -Property @{Expression='TimesRevoked';Descending=$true}, @{Expression='Identity'})
+
+# ---------------------------------------------------------------------------
 # Console output
 # ---------------------------------------------------------------------------
 if ($OutputMode -in @('Console', 'Both')) {
@@ -567,6 +657,9 @@ if ($OutputMode -in @('Console', 'Both')) {
     Write-Host "  Decision activity spans $activityDays decision day(s) (deduped across cumulative daily snapshots, dated by Decision Date)" -ForegroundColor DarkGray
     Write-Host "  Revoked:    $totalRevoked distinct items (avg ${avgRevoked}/decision day)" -ForegroundColor Red
     Write-Host "  New Scope:  $totalNewScope distinct items (avg ${avgNewScope}/decision day)" -ForegroundColor Green
+    if (@($reApprovedFlops).Count -gt 0) { Write-Host "  Re-Approved After Revoke (flops): $(@($reApprovedFlops).Count) grant(s) revoked earlier in the window and approved again" -ForegroundColor Yellow }
+    if (@($reRevokedGrants).Count -gt 0) { Write-Host "  Re-Revoked Grants: $(@($reRevokedGrants).Count) grant(s) revoked on more than one day -- access came back after a revoke" -ForegroundColor Yellow }
+    if ($intraReportDupes -gt 0) { Write-Host "  DATA QUALITY: $intraReportDupes duplicate row(s) WITHIN single reports (same grant+reviewer+decision date twice in one file) -- possible upstream cache duplication" -ForegroundColor Yellow }
     if ($approvedLatest -ge 0) {
         $apDeltaTxt = if ($null -ne $approvedDelta) { " ($(if ($approvedDelta -ge 0) { "+$approvedDelta" } else { $approvedDelta }) across the window)" } else { '' }
         Write-Host "  Approved:   $('{0:N0}' -f $approvedLatest) campaign-to-date$apDeltaTxt" -ForegroundColor Cyan
@@ -606,19 +699,53 @@ if ($OutputMode -in @('HTML', 'Both')) {
     $newScopeOnlySvg = New-SvgDailySeries -Dates $activityLabels -Counts $newScopeCounts -Fill '#27ae60'
 
     # Raw per-day numbers backing the charts (exact counts even when bars are too
-    # narrow to carry value labels).
+    # narrow to carry value labels). Cumulative columns reconcile the daily
+    # first-sightings back to register-style running totals: a source report showing
+    # 35 new-scope items the day after one showing 28 is 7 first-sightings that day,
+    # and the cumulative column reads 35.
     $dailyNumbersRows = if ($activityLabels.Count -gt 0) {
+        $cumRev = 0; $cumNew = 0
         (0..($activityLabels.Count - 1) | ForEach-Object {
             $net = $revokedCounts[$_] - $newScopeCounts[$_]
-            "<tr><td>$(ConvertTo-Safe $activityLabels[$_])</td><td style='text-align:right'>$($revokedCounts[$_])</td><td style='text-align:right'>$($newScopeCounts[$_])</td><td style='text-align:right'>$(if ($net -gt 0) { "+$net" } else { $net })</td></tr>"
+            $cumRev += $revokedCounts[$_]; $cumNew += $newScopeCounts[$_]
+            "<tr><td>$(ConvertTo-Safe $activityLabels[$_])</td><td style='text-align:right'>$($revokedCounts[$_])</td><td style='text-align:right'>$($newScopeCounts[$_])</td><td style='text-align:right'>$(if ($net -gt 0) { "+$net" } else { $net })</td><td style='text-align:right;color:#777'>$cumRev</td><td style='text-align:right;color:#777'>$cumNew</td></tr>"
         }) -join "`n"
-    } else { "<tr><td colspan='4' style='color:#777;font-style:italic'>No decision activity found.</td></tr>" }
+    } else { "<tr><td colspan='6' style='color:#777;font-style:italic'>No decision activity found.</td></tr>" }
+
+    # Re-approved flop table rows (Section 2 sub-table)
+    $flopRows = if (@($reApprovedFlops).Count -gt 0) {
+        (@($reApprovedFlops) | ForEach-Object {
+            "<tr><td>$(ConvertTo-Safe $_.Identity)</td><td>$(ConvertTo-Safe $_.AccessName)</td><td>$(ConvertTo-Safe $_.Source)</td><td>$(ConvertTo-Safe $_.Reviewer)</td><td style='color:#c0392b'>$(ConvertTo-Safe $_.RevokedDay)</td><td style='color:#27ae60'>$(ConvertTo-Safe $_.ReApprovedDay)</td></tr>"
+        }) -join "`n"
+    } else { "<tr><td colspan='6' style='color:#777;font-style:italic'>None detected in this window.</td></tr>" }
 
     # Approved KPI tile (only when the campaign summary table was scrapeable)
     $approvedKpi = if ($approvedLatest -ge 0) {
         $apDeltaLbl = if ($null -ne $approvedDelta) { ", $(if ($approvedDelta -ge 0) { "+$approvedDelta" } else { $approvedDelta }) this window" } else { '' }
         "<div class='kpi'><div class='value' style='color:#2c7fb8'>$('{0:N0}' -f $approvedLatest)</div><div class='label'>Approved (campaign-to-date$apDeltaLbl)</div></div>"
     } else { '' }
+
+    # Re-approved flop KPI tile (only when flops were detected)
+    $flopKpi = if (@($reApprovedFlops).Count -gt 0) {
+        "<div class='kpi'><div class='value' style='color:#e67e22'>$(@($reApprovedFlops).Count)</div><div class='label'>Re-Approved After Revoke</div></div>"
+    } else { '' }
+
+    # Re-revoked grants KPI tile (only when repeats were detected)
+    $reRevokedKpi = if (@($reRevokedGrants).Count -gt 0) {
+        "<div class='kpi'><div class='value' style='color:#c0392b'>$(@($reRevokedGrants).Count)</div><div class='label'>Re-Revoked Grants</div></div>"
+    } else { '' }
+
+    # Data-quality warning (intra-report duplicate rows -- possible cache duplication)
+    $dupeWarning = if ($intraReportDupes -gt 0) {
+        "<div class='note' style='color:#9a6700;border:1px solid #ffd97a;background:#fff7e6;padding:6px 10px'><strong>Data quality:</strong> $intraReportDupes duplicate row(s) found WITHIN single reports (the same identity + access + source + reviewer + decision date listed twice in one file). Cross-day repetition is normal for these cumulative registers; a duplicate inside ONE report is not, and may indicate upstream cache duplication. Examples: $(ConvertTo-Safe ($intraReportDupeExamples -join '; '))</div>"
+    } else { '' }
+
+    # Re-revoked table rows (Section 2 sub-table)
+    $reRevokedRows = if (@($reRevokedGrants).Count -gt 0) {
+        (@($reRevokedGrants) | ForEach-Object {
+            "<tr><td>$(ConvertTo-Safe $_.Identity)</td><td>$(ConvertTo-Safe $_.AccessName)</td><td>$(ConvertTo-Safe $_.Source)</td><td style='text-align:right;color:#c0392b;font-weight:600'>$($_.TimesRevoked)</td><td>$(ConvertTo-Safe $_.RevokeDays)</td><td>$(ConvertTo-Safe $_.Reviewers)</td></tr>"
+        }) -join "`n"
+    } else { "<tr><td colspan='6' style='color:#777;font-style:italic'>None detected in this window -- no grant was revoked on more than one day.</td></tr>" }
 
     # Net change styling
     $netColor = if ($netChange -gt 0) { '#27ae60' } elseif ($netChange -lt 0) { '#c0392b' } else { '#888' }
@@ -685,12 +812,15 @@ summary{cursor:pointer;font-weight:600;padding:4px 0}
 <h1>Decision Activity Tracker</h1>
 <div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $totalDays day(s) from $($reports.Count) report(s), $($reports[0].Label) &rarr; $($reports[-1].Label)$(if ($fallbackFileCount -gt 0) { " &nbsp;|&nbsp; $fallbackFileCount file(s) dated by file-modified time" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
 <div class='note'>Sourced from daily evidence reports. Summarizes revoked and newly approved access decisions across the reporting period. "New Scope" counts truly new access only -- "Newly Decided" approvals of items that already existed in the prior campaign are intentionally excluded from these totals and from Net Change.</div>
+$dupeWarning
 
 <h2>1. Decision Activity Summary</h2>
 <div class='kpi-row'>
 <div class='kpi'><div class='value' style='color:#c0392b'>$totalRevoked</div><div class='label'>Total Revoked (distinct)</div></div>
 <div class='kpi'><div class='value' style='color:#27ae60'>$totalNewScope</div><div class='label'>Total New Scope (distinct)</div></div>
 $approvedKpi
+$flopKpi
+$reRevokedKpi
 <div class='kpi'><div class='value' style='color:$netColor'>$netDisplay</div><div class='label'>Net Change ($netNote)</div></div>
 <div class='kpi'><div class='value' style='color:#336699'>$totalDays</div><div class='label'>Report Days</div></div>
 <div class='kpi'><div class='value' style='color:#336699'>$activityDays</div><div class='label'>Decision Days</div></div>
@@ -701,7 +831,13 @@ $approvedKpi
 <h2>2. Daily Decision Trend</h2>
 <div class='note'>Counts are bucketed by each item's own Decision Date (not the report file date) and de-duplicated
 across the window's cumulative daily snapshots -- the same revocation listed in 20 consecutive reports counts once,
-on the day it was decided. Red = revoked; green = newly approved (new scope).</div>
+on the day it was decided. Red = revoked; green = newly approved (new scope).
+<br><strong>Reading these against the source reports:</strong> the reports' section headers are campaign-cumulative
+CURRENT-STATE counts, so a report showing 35 new-scope items the day after one showing 28 means 7 first-sightings
+that day -- the bars show the 7, and the Cumulative columns in the raw table read 35. A Revoked count that SHRINKS
+between two reports means a revoked item was re-approved (it leaves the register); those grants are listed in the
+Re-Approved After Revoke table below. Every report day appears on the axis: a zero bar means the report ran and
+nothing was decided that day. Days absent entirely had neither a report nor any decision activity (weekends/holidays).</div>
 <h3>Combined &mdash; revoked vs new scope per day</h3>
 <div style='overflow-x:auto'>$trendSvg</div>
 <h3>Revoked only</h3>
@@ -709,9 +845,29 @@ on the day it was decided. Red = revoked; green = newly approved (new scope).</d
 <h3>New scope only</h3>
 <div style='overflow-x:auto'>$newScopeOnlySvg</div>
 <h3>Raw daily numbers</h3>
-<table class='report'><thead><tr><th>Decision Day</th><th style='text-align:right'>Revoked</th><th style='text-align:right'>New Scope</th><th style='text-align:right'>Net (Rev - New)</th></tr></thead>
+<table class='report'><thead><tr><th>Decision Day</th><th style='text-align:right'>Revoked</th><th style='text-align:right'>New Scope</th><th style='text-align:right'>Net (Rev - New)</th><th style='text-align:right'>Cumulative Revoked</th><th style='text-align:right'>Cumulative New Scope</th></tr></thead>
 <tbody>
 $dailyNumbersRows
+</tbody></table>
+
+<h3>Re-Approved After Revoke (flops)</h3>
+<div class='note'>Grants revoked earlier in the window and approved again later (approve -&gt; revoke -&gt; approve).
+Detected by matching identity + access + source across the deduped revoked and new-scope registers; the reviewer
+shown is the re-approver. Only flops whose revoke AND re-approval both fall inside the scraped window are
+detectable here -- the V4g/V8 state database tracks re-approvals across any time span.</div>
+<table class='report'><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Re-Approved By</th><th>Revoked On</th><th>Re-Approved On</th></tr></thead>
+<tbody>
+$flopRows
+</tbody></table>
+
+<h3>Re-Revoked Grants (repeat revocations)</h3>
+<div class='note'>The same grant (identity + access + source) revoked on MORE THAN ONE decision day in the window --
+revoked access that came back (failed remediation, re-provisioning, or a revoke -&gt; approve -&gt; revoke flip) and had
+to be revoked again. Distinct revoke events are never de-duplicated: each one counts in the totals and charts on its
+own day; this table makes the repeat pattern visible.</div>
+<table class='report'><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th style='text-align:right'>Times Revoked</th><th>Revoke Days</th><th>Reviewers</th></tr></thead>
+<tbody>
+$reRevokedRows
 </tbody></table>
 
 <h2>3. Revoked Access Detail</h2>

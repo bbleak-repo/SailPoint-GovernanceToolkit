@@ -282,6 +282,18 @@
         },
         "ConfidenceScoreGrade": { "A": 90, "B": 80, "C": 70, "D": 60 }
     },
+    "B2B": {
+        "GroupPrefix": "CLD-B2B",
+        "CertifierIdentityId": "",
+        "DefaultCertDeadlineDays": 30,
+        "DefaultLeadershipTitles": [
+            "Director",
+            "VP",
+            "Chief"
+        ],
+        "AutoCreateCampaign": false,
+        "_CertifierNote": "B2B guests arrive via cross-tenant sync and have no manager identity in the local tenant, so B2B campaigns never fall back to manager review. CertifierIdentityId resolves first; when empty the setup script uses the Entra source owner, then the access profile/role owner, and refuses to create the campaign if none resolve."
+    },
     "GovernancePolicy": {
         "Enabled": true,
         "Policies": [

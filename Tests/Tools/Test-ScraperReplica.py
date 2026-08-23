@@ -336,10 +336,13 @@ def scrape_folder(folder):
         print(f"  {c:3d}  {n}")
 
     rev, ns = dedupe_decisions(report_list)
-    days = sorted(set(rev) | set(ns))
+    # Axis mirrors the PowerShell scraper: decision days PLUS report days, so a quiet
+    # report day shows as a zero row instead of vanishing.
+    report_days = {rday for _, rday in report_list}
+    days = sorted(set(rev) | set(ns) | report_days)
     rc, nc = Counter(rev), Counter(ns)
     print(f"\nDeduped decisions: {len(rev)} revoked, {len(ns)} new scope, "
-          f"{len(days)} decision day(s)")
+          f"{len(set(rev) | set(ns))} decision day(s), {len(days)} axis day(s)")
     for d in days:
         print(f"  {d}  revoked={rc.get(d, 0):5d}  newscope={nc.get(d, 0):5d}")
     if approved_snapshots:

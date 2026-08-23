@@ -1,0 +1,147 @@
+@startuml
+!theme plain
+title B2B Group Naming Convention\nCLD-B2B-* Taxonomy, Connector Routing, and Enterprise App Mapping
+
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontSize 11
+skinparam roundCorner 8
+skinparam shadowing false
+
+skinparam rectangle {
+    BorderThickness 2
+    FontSize 11
+}
+skinparam note {
+    BackgroundColor #FFFFCC
+    BorderColor #CCCC00
+    FontSize 10
+}
+skinparam ArrowColor #555555
+skinparam ArrowFontSize 10
+
+' Color taxonomy
+'   Orange  #FF6600  SailPoint ISC
+'   Green   #339933  Entra ID / cloud
+'   Gray    #999999  Active Directory / on-prem
+'   Blue    #336699  B2B groups
+'   Purple  #663399  Enterprise app assignments
+
+package "Group Name Routing" {
+    rectangle "SG-*\n(on-prem synced)" as SGPrefix #F0F0F0;line:999999
+    rectangle "CLD-*\n(cloud native)" as CLDPrefix #E8F8E8;line:339933
+}
+
+rectangle "Active Directory\n(on-prem)" as AD #F0F0F0;line:999999
+rectangle "Microsoft Entra ID\n(cloud)" as ENTRA #E8F8E8;line:339933
+
+SGPrefix --> AD : "AD connector\nowns membership"
+CLDPrefix --> ENTRA : "Entra connector\nowns membership"
+
+note right of SGPrefix
+  onPremisesSyncEnabled = true.
+  ISC provisioning through the
+  Entra connector FAILS on these:
+  membership is mastered on-prem.
+end note
+
+package "CLD-B2B-* Taxonomy (per partner)" {
+
+    rectangle "Tier 1 -- Baseline\nCLD-B2B-{Partner}-Users" as T1 #E6EEF5;line:336699
+    rectangle "Tier 1+ -- Leadership\nCLD-B2B-{Partner}-Leadership" as T1P #E6EEF5;line:336699
+    rectangle "Tier 2 -- Elevated\nCLD-B2B-{Partner}-{App}-Admin" as T2 #E6EEF5;line:336699
+
+    rectangle "CLD-B2B-Unknown-Review\n(transform default)" as UNK #E6EEF5;line:336699
+}
+
+ENTRA --> T1
+ENTRA --> T1P
+ENTRA --> T2
+ENTRA --> UNK
+
+package "SailPoint ISC Governance Layer" {
+
+    rectangle "Access Profile\nB2B {Partner} - Users Access\nrequestable = false" as AP1 #FFE6CC;line:FF6600
+    rectangle "Access Profile\nB2B {Partner} - Leadership Access\nrequestable = false" as AP2 #FFE6CC;line:FF6600
+    rectangle "Access Profile\nB2B {Partner} - {App}-Admin Access\nrequestable = true" as AP3 #FFE6CC;line:FF6600
+
+    rectangle "Role: B2B-{Partner}-User\nCRITERIA:\nuserType EQUALS Guest\nAND email CONTAINS {domain}" as R1 #FFE6CC;line:FF6600
+    rectangle "Role: B2B-{Partner}-Leadership\nCRITERIA: baseline AND\n(jobTitle CONTAINS Director\nOR VP OR Chief)" as R2 #FFE6CC;line:FF6600
+
+    rectangle "Access Request\n+ Approval" as REQ #FFE6CC;line:FF6600
+
+    rectangle "Transform\nB2B Partner Group Resolver\nemail -> split(@,1) -> lower -> lookup" as TF #FFE6CC;line:FF6600
+}
+
+T1  --> AP1 : entitlement
+T1P --> AP2 : entitlement
+T2  --> AP3 : entitlement
+
+AP1 --> R1 : granted by
+AP2 --> R2 : granted by
+AP3 --> REQ : granted by
+
+R1 .down.> T1  : provisions membership
+R2 .down.> T1P : provisions membership
+REQ .down.> T2 : provisions membership
+
+TF ..> T1 : resolves\n{domain} -> group
+TF ..> UNK : unmatched domain
+
+note bottom of TF
+  ISC lookup transforms are EXACT match.
+  A table keyed "partnera.com" never matches
+  the raw input "user@partnera.com", so the
+  input MUST reduce the address to a bare
+  lowercase domain before the lookup runs.
+
+  Trap: if the tenant's email identity attribute
+  maps to the guest UPN
+  (user_partnera.com#EXT#@corp.onmicrosoft.com)
+  every guest resolves to corp.onmicrosoft.com
+  and the whole table misses.
+end note
+
+package "Enterprise App Assignments" {
+    rectangle "ServiceNow\n(user)" as APP1 #EDE6F5;line:663399
+    rectangle "SharePoint\n(reader)" as APP2 #EDE6F5;line:663399
+    rectangle "Exec Dashboards\nBoard Portal" as APP3 #EDE6F5;line:663399
+    rectangle "ServiceNow\n(admin)" as APP4 #EDE6F5;line:663399
+}
+
+T1  --> APP1 : SAML assignment
+T1  --> APP2 : SAML assignment
+T1P --> APP3 : SAML assignment
+T2  --> APP4 : SAML assignment
+
+note as N_CADENCE
+  **Certification cadence**
+  Tier 1 baseline     quarterly, source-owner review
+  Tier 1+ leadership  quarterly, source-owner review
+  Tier 2 elevated     quarterly, app-owner review
+
+  B2B guests arrive via cross-tenant sync and have
+  NO manager identity in the local tenant, so campaigns
+  assign an EXPLICIT certifier. Manager review is never
+  a fallback: it would assign every item to nobody.
+end note
+
+note as N_ASYNC
+  **Role criteria are asynchronous**
+  ISC evaluates membership criteria during identity
+  refresh, not at role creation. New guests receive
+  their roles after the next aggregation cycle.
+end note
+
+N_CADENCE .. R1
+N_ASYNC .. R2
+
+legend right
+  |= Color |= Layer |
+  | <#FFE6CC> | SailPoint ISC (#FF6600) |
+  | <#E8F8E8> | Entra ID / cloud (#339933) |
+  | <#F0F0F0> | Active Directory / on-prem (#999999) |
+  | <#E6EEF5> | B2B groups (#336699) |
+  | <#EDE6F5> | Enterprise app assignments (#663399) |
+endlegend
+
+@enduml

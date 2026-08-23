@@ -187,6 +187,11 @@ function Invoke-SPStateTracking {
     $resolveFailures = 0
     $rosterFailures = 0
     $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+    # Incremental checkpointing: multi-hour month-scale runs used to persist state
+    # ONLY at the very end, so a crash at hour 3 lost every instance processed.
+    $trackingStart = Get-Date
+    $instancesSinceCheckpoint = 0
+    $checkpointEvery = 10
 
     # --- Process each series, each instance ---
     foreach ($series in $allSeries) {
@@ -329,6 +334,27 @@ function Invoke-SPStateTracking {
                     instanceDate  = $instDate
                     series        = $seriesStem
                     status        = $campStatus
+                }
+            }
+
+            # Incremental checkpoint: persist both state maps + processed-instance
+            # bookkeeping every $checkpointEvery instances so a killed multi-hour run
+            # loses at most the last batch. Terminal instances marked above are
+            # skipped on the next run, so a restart resumes from the checkpoint (and
+            # re-processing any instance converges by design). Checkpoint failures
+            # warn and continue -- the envelope-checked end-of-run write (after the
+            # global scope sweep) remains the authoritative one.
+            $instancesSinceCheckpoint++
+            if ($instancesSinceCheckpoint -ge $checkpointEvery) {
+                $instancesSinceCheckpoint = 0
+                try {
+                    [void](Write-SPEntitlementState -StateMap $entStateMap -Path $entPath -ProcessedInstances $processedInstances -LastRunDate $TodayLabel)
+                    [void](Write-SPReviewerState -ReviewerMap $rvReviewerMap -Path $rvPath -ProcessedInstances $processedInstances -LastRunDate $TodayLabel)
+                    $elapsedMin = [math]::Round(((Get-Date) - $trackingStart).TotalMinutes, 1)
+                    Write-Host "    [checkpoint] $instancesProcessed instance(s) processed, state persisted ($elapsedMin min elapsed)" -ForegroundColor DarkCyan
+                }
+                catch {
+                    Write-Warning "Invoke-SPStateTracking: checkpoint write failed (continuing): $($_.Exception.Message)"
                 }
             }
         }
