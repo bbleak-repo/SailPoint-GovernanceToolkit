@@ -22,15 +22,30 @@ scheduled orchestrator run).
 3. **Disconnected app delivery** -- Confirm CSV files arrived for all registered apps.
    Check the orchestrator log for `StepName=DisconnectedApps` status. `NoChanges` is
    normal; `ThresholdBlocked` or `Error` requires investigation.
-4. **Daily evidence (V4b + V7)** -- Run V4b to generate the daily evidence report and
-   update `daily-metrics.jsonl`. Then run V7 for the trending visualization. If reviewer
-   counts seem stale (Items % and Reviewer % diverge), re-run with `-RefreshCache` to
-   force a fresh ISC fetch. Check the "Reviewer Compliance Accountability" section in V7
-   for Never Complied and Absent reviewers.
+4. **Daily evidence** -- Two pipelines are available:
+
+   **Standard pipeline (V4b + V7/V7c)** -- V4b exports from ISC and writes
+   `daily-metrics.jsonl`. V7 or V7c visualizes the trend. V7c adds the Reviewer
+   Engagement Heatmap (C/P/M/U daily grid) and Entitlement State Summary.
    ```powershell
    .\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -DaysBack 18 -OutputMode Both
-   .\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -DaysBack 18 -OutputMode Both
+   .\Scripts\Invoke-SPDailyEvidenceReportV7c.ps1 -DaysBack 18 -OutputMode Both
    ```
+
+   **State-powered pipeline (V4g + V8)** -- V4g exports from ISC AND updates the
+   persistent entitlement state database. V8 renders the state-powered report with
+   honest Newly Decided tracking, Re-Approved After Revoke detection, and reviewer
+   weekly compliance. Use this pipeline for authoritative newly-decided evidence.
+   ```powershell
+   .\Scripts\Invoke-SPDailyEvidenceReportV4g.ps1 -DaysBack 18 -OutputMode Both
+   .\Scripts\Invoke-SPDailyEvidenceReportV8.ps1
+   # Or use V8's -AutoFetch to run the full pipeline in one command:
+   .\Scripts\Invoke-SPDailyEvidenceReportV8.ps1 -AutoFetch
+   ```
+
+   If reviewer counts seem stale (Items % and Reviewer % diverge), re-run V4b/V4g
+   with `-RefreshCache` to force a fresh ISC fetch. Check the "Reviewer Compliance
+   Accountability" section for Never Complied and Absent reviewers.
 5. **Escalation activity** -- Check if any stale certifications were escalated. Look for
    `Action=Escalate` in the log. Repeated escalations for the same reviewer indicate
    the reviewer is unresponsive -- follow up manually.
@@ -80,6 +95,14 @@ scheduled orchestrator run).
 | Encrypted vault | `Data\sp-vault.enc` |
 | Task Scheduler history | Windows Event Viewer > Applications and Services Logs > Microsoft > Windows > TaskScheduler |
 | JSONL audit trail | `Audit\audit-YYYYMMDD-HHmmss.jsonl` (machine-parseable evidence) |
+| Entitlement state database | `Audit\state\entitlement-state.jsonl` (persistent cross-campaign state) |
+| Reviewer state database | `Audit\state\reviewer-state.jsonl` (C/P/M/U engagement tracking) |
+| State-powered reports (V8) | `Reports\daily-evidence-v8-*.html` |
+| Trending reports (V7c) | `Reports\daily-evidence-v7c-*.html` |
+| Scraper dashboards | `Reports\decision-scrape-*.html`, `Reports\pending-reviewer-*.html` |
+| B2B setup reports | `Reports\b2b-setup-*.html` |
+| B2B health check reports | `Reports\b2b-healthcheck-*.html` |
+| Cache diagnostic logs | `Reports\diagnostics\` (timestamped integrity scan logs) |
 | Archived output | `Archive\` (monthly zip files from retention) |
 
 ---
@@ -162,6 +185,19 @@ Perform these checks weekly (suggested: Monday morning).
    automatically (Step 11). Review the `stalled-reviewers-*.html` report if generated.
    A RED alert means a reviewer is stalled across multiple campaigns and likely needs
    reassignment (PTO, departure). Check with their manager or reassign the certification.
+7. **Scraper dashboards** -- Run the decision and pending-reviewer scrapers to generate
+   weekly trend dashboards from the daily evidence HTML reports. These identify chronic
+   non-compliance patterns and gaming behavior that daily reports may not surface.
+   ```powershell
+   .\Scripts\Invoke-SPDecisionScrape.ps1 -DaysBack 14
+   .\Scripts\Invoke-SPPendingReviewerScrape.ps1 -DaysBack 14
+   ```
+8. **B2B health check** (if B2B partners are onboarded) -- Verify governance layer
+   integrity for each B2B partner source. Catches aggregation staleness, role criteria
+   drift, transform coverage gaps, and unassigned guests.
+   ```powershell
+   .\Scripts\Invoke-SPB2BHealthCheck.ps1 -SourceName 'Entra ID [source]'
+   ```
 
 ---
 
@@ -186,6 +222,17 @@ The toolkit warns at startup if the cache directory has overly permissive ACLs
 macOS/Linux).
 
 ### Cache inspection
+
+For a comprehensive scan of all cache types (item caches, identity, accounts, snapshots,
+trend JSONL, governance metrics), run the cache diagnostic:
+
+```powershell
+.\Scripts\Invoke-SPCacheDiagnostic.ps1
+# or with verbose console output:
+.\Scripts\Invoke-SPCacheDiagnostic.ps1 -Verbose
+```
+
+For quick checks on specific stores:
 
 ```powershell
 # Check identity cache health

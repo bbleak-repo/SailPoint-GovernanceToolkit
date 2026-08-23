@@ -1137,7 +1137,65 @@ It auto-detects the file kind and flags, with **Error / Warn / Info** severity:
 > ERROR-severity finding, `2` path/parameter error. Read-only (CLI-005) — never writes or mutates.
 
 **Related:** `Invoke-SPCampaignDiff.ps1` (produces the snapshots), the item cache (*Campaign
-filtering & the item cache*).
+filtering & the item cache*), `Invoke-SPCacheDiagnostic.ps1` (broader scan across all cache types).
+
+### `Invoke-SPCacheDiagnostic.ps1`
+**Purpose:** comprehensive **cache integrity scanner** across all cache types -- item caches,
+identity/account caches, campaign snapshots, trend JSONL, and governance metrics (output:
+timestamped diagnostic log in `Reports\diagnostics\`).
+
+- Scans every cache file in the toolkit: `items-*.jsonl` + `.meta.json` sidecars, `identities.jsonl`,
+  `accounts.jsonl`, campaign snapshots, campaign-trend JSONL, governance metrics
+- Detects: partial/interrupted caches (missing meta sidecar), stale caches past TTL, corrupt or
+  unparseable JSON/JSONL lines, duplicate keys, PS 5.1 datetime auto-conversion artifacts,
+  AccessId instability, baseline captures masquerading as scope additions, orphaned files,
+  cross-snapshot key drift, and trend JSONL gaps
+- Categorizes findings as ERROR, WARN, or INFO
+- Read-only: never modifies any cache file
+
+| Parameter | Description |
+|---|---|
+| `-OutputPath` | Directory for the diagnostic log (default `.\Reports\diagnostics`). |
+| `-Verbose` | Show all findings in console (not just errors/warnings). |
+
+```powershell
+# Full diagnostic scan (log file only)
+.\Scripts\Invoke-SPCacheDiagnostic.ps1
+
+# Full scan with verbose console output
+.\Scripts\Invoke-SPCacheDiagnostic.ps1 -Verbose
+```
+
+**Output:** timestamped log file in the diagnostics directory.
+**Related:** `Invoke-SPCacheValidate.ps1` (focused snapshot/item validation with exit codes),
+`Clear-SPAuditItemCache` / `Clear-SPIdentityCache` (remediation after diagnosis).
+
+### `Invoke-SPTrendBackfill.ps1`
+**Purpose:** one-time **trend JSONL hydration** from existing campaign snapshots -- populates
+the campaign-trend JSONL files that V5 and the Campaign Trend Report use for multi-day
+progression charts.
+
+- Reads all snapshots in `Audit\Snapshots\` and generates trend points via `Save-SPCampaignTrendPoint`
+- Safe to run multiple times (atomic append, deduplicates by timestamp)
+- Intended for bootstrapping: after the initial backfill, daily V3/V4/V5 runs write trend
+  points automatically
+
+| Parameter | Description |
+|---|---|
+| `-SnapshotDir` | Override snapshot directory (default from config). |
+| `-DaysBack <n>` | Only backfill snapshots from the last N days (default 90). |
+
+```powershell
+# Backfill from all snapshots within 90 days
+.\Scripts\Invoke-SPTrendBackfill.ps1
+
+# Backfill only the last 30 days
+.\Scripts\Invoke-SPTrendBackfill.ps1 -DaysBack 30
+```
+
+**Output:** writes to `Audit\metrics\campaign-trend\{campaignId}.jsonl` (one file per campaign).
+**Related:** `Invoke-SPCampaignTrendReport.ps1` (renders trend charts from the JSONL this script hydrates),
+`Invoke-SPCampaignDiff.ps1` (produces the snapshots that this script reads).
 
 ### `Invoke-SPEntitlementHistory.ps1`
 **Purpose:** the **decision timeline** for each identity+entitlement across **many** snapshots —
