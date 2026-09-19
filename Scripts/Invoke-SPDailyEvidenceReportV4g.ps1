@@ -1383,17 +1383,20 @@ try {
             $d = $audit['Decisions']
             if ($null -eq $d -or $null -eq $d['Pending']) { continue }
             foreach ($pending in @($d['Pending'])) {
-                $pId = $pending.IdentityId
-                if ($null -ne $pId -and $highRiskIds.ContainsKey($pId)) {
+                # $pendId, NOT $pendId: PS variable names are case-insensitive, so $pendId IS the
+                # read-only automatic $PID -- assigning threw on every engine and silently
+                # degraded the high-risk-exposure KPI behind its catch block.
+                $pendId = $pending.IdentityId
+                if ($null -ne $pendId -and $highRiskIds.ContainsKey($pendId)) {
                     $highRiskPending.Add([PSCustomObject]@{
-                        IdentityId   = $pId
+                        IdentityId   = $pendId
                         IdentityName = $pending.IdentityName
-                        RiskScore    = $highRiskIds[$pId].RiskScore
+                        RiskScore    = $highRiskIds[$pendId].RiskScore
                         AccessName   = $pending.AccessName
                         SourceName   = if ($null -ne $pending.SourceName) { $pending.SourceName } else { '' }
                         CampaignName = $audit['CampaignName']
                     })
-                    $highRiskPendingIdentityIds[$pId] = $true
+                    $highRiskPendingIdentityIds[$pendId] = $true
                 }
             }
         }

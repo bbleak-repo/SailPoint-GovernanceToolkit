@@ -3745,8 +3745,11 @@ function Test-SPGovernancePolicy {
         Write-SPLog -Message "Test-SPGovernancePolicy: GovernancePolicy.Enabled is false, skipping all" -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
         $skippedPols = @()
         foreach ($pol in $gpPolicies) {
-            $pId = if ($pol -is [hashtable]) { $pol['Id'] } else { $pol.Id }; $pNm = if ($pol -is [hashtable]) { $pol['Name'] } else { $pol.Name }; $pSv = if ($pol -is [hashtable]) { $pol['Severity'] } else { $pol.Severity }
-            $skippedPols += @{ Id = $pId; Name = $pNm; Severity = $pSv; Result = 'SKIPPED'; Details = 'GovernancePolicy.Enabled is false'; Violations = @() }
+            # $polId, NOT $pId: variable names are case-insensitive, so $pId IS the
+            # read-only automatic $PID -- the assignment throws on every engine and
+            # silently degraded this whole step behind the caller's catch block.
+            $polId = if ($pol -is [hashtable]) { $pol['Id'] } else { $pol.Id }; $pNm = if ($pol -is [hashtable]) { $pol['Name'] } else { $pol.Name }; $pSv = if ($pol -is [hashtable]) { $pol['Severity'] } else { $pol.Severity }
+            $skippedPols += @{ Id = $polId; Name = $pNm; Severity = $pSv; Result = 'SKIPPED'; Details = 'GovernancePolicy.Enabled is false'; Violations = @() }
         }
         return @{ OverallCompliant = $true; EvaluatedAt = $evaluatedAt; Policies = $skippedPols; Summary = @{ TotalPolicies = $gpPolicies.Count; Passed = 0; Failed = 0; CriticalFailures = 0; WarningFailures = 0; Skipped = $gpPolicies.Count } }
     }
