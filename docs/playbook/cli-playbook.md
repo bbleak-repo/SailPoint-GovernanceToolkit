@@ -34,7 +34,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 
 ---
 
-## Script Quick Reference (all 66 scripts)
+## Script Quick Reference (all 67 scripts)
 
 > Ctrl+F on the script name to jump to its detailed section below.
 > **Category:** EXPORT = calls ISC API | REPORT = generates output from local data |
@@ -57,6 +57,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 | `Invoke-SPCampaignSearch.ps1` | EXPORT | Unified campaign search (keywords, metrics, reviewer, source) | YES | Console/HTML/CSV |
 | `Invoke-SPCampaignTrendReport.ps1` | REPORT | KPI trend report for recurring campaigns from trend JSONL | NO | HTML |
 | `Invoke-SPCertTracker.ps1` | EXPORT | Executive cert progress tracker (pipeline board) | YES | HTML |
+| `Invoke-SPConfigInventory.ps1` | EXPORT | Full ISC configuration inventory (sources, campaigns, roles, entitlements, ...) + permission probe | YES | HTML/JSON |
 | `Invoke-SPDailyEvidenceReport.ps1` | EXPORT | Daily evidence v1: KPI dashboard + domino tracker | YES | HTML |
 | `Invoke-SPDailyEvidenceReportV2.ps1` | EXPORT | Daily evidence v2: lean leadership-grade attestation | YES | HTML |
 | `Invoke-SPDailyEvidenceReportV3.ps1` | EXPORT | Daily evidence v3: day-over-day delta with scope-diff | YES | HTML |
@@ -2070,7 +2071,7 @@ when the state predates the end of the requested window.
 
 **Report sections:**
 1. **Entitlement State Summary** -- honest decision distribution (APPROVE / REVOKE / PENDING / UNDECIDED tiles)
-2. **Newly Decided** -- items that transitioned from PENDING/UNDECIDED to APPROVE/REVOKE within the date range. Includes the **Re-Approved After Revoke** sub-table: observed REVOKE -> APPROVE re-grants within the window (the re-grant governance signal), with the revocation day mined from each record's state log. First-seen-already-decided items appear in neither list
+2. **Newly Decided** -- items that transitioned from PENDING/UNDECIDED to APPROVE/REVOKE within the date range. Includes the **Re-Approved After Revoke** sub-table: observed REVOKE -> APPROVE re-grants within the window (the re-grant governance signal), with the revocation day mined from each record's state log. First-seen-already-decided items appear in neither list. Also includes **Decision Activity**: a daily approval/revocation transition trend chart with raw daily table, top revoked entitlements/identities, and per-source breakdown -- the Invoke-SPDecisionScrape analytics computed from honest state transitions instead of scraped HTML (auto-approve artifacts never count; justifications stay in the V4g register)
 3. **Chronically Unreviewed** -- items stuck in PENDING/UNDECIDED for N+ consecutive campaigns
 4. **Dropped from Scope** -- items that disappeared from all campaigns
 5. **Reviewer Engagement Summary** -- engagement scores with streaks, sorted worst-first
@@ -2214,6 +2215,56 @@ the V4g/V8 state pipeline.
 ```
 
 **Read-only.** **Output:** `Decision-Activity-Tracker-<timestamp>.html` in the output folder.
+
+### `Invoke-SPConfigInventory.ps1`
+**Purpose:** document the ENTIRE ISC configuration in one read-only pass -- sources, identity
+profiles, certification campaigns + templates, roles, access profiles, entitlements, governance
+groups, SoD policies, identity attributes, transforms, workflows, VA clusters, service desk
+integrations, password policies, segments, connector rules, branding, and the public-identities
+config. Renders a self-contained HTML configuration document (KPI tiles + per-object tables + a
+permission matrix + a **Governance Posture Findings** assessment: unhealthy/ownerless sources,
+ACTIVE campaigns past deadline, ownerless roles/access profiles, privileged-and-requestable
+entitlements, failing workflows, unenforced SoD policies, degraded VA clusters) and a JSON export
+with the full raw objects and the findings list. `-IncludeCsv` adds auditor-friendly per-section
+flat CSVs. Every call is an HTTP GET -- nothing in ISC is created, changed, or deleted.
+
+**Permissions -- run the probe first.** ISC PATs inherit the OWNING USER's permissions (optionally
+narrowed by PAT scopes). Simplest full coverage: a PAT owned by an ORG_ADMIN with `sp:scopes:all`.
+The definitive per-tenant answer comes from the probe:
+
+```powershell
+.\Scripts\Invoke-SPConfigInventory.ps1 -PermissionCheck
+```
+
+prints a matrix of every endpoint with HTTP 200 (readable) / 403 (permission missing, with the
+least-privilege user level to grant) / 404 (absent on the tenant's API version), and writes it as
+JSON. The full report renders the same matrix from the live run, so every inventory document also
+records exactly what the token could and could not see. Least-privilege user levels per section are
+documented in the script help (`-Help`).
+
+| Parameter | Description |
+|---|---|
+| `-BaseUrl <url>` | Tenant API root (with or without version segment). Default: settings.json `Api.BaseUrl`. |
+| `-Token <jwt>` | Bearer token. Default: the toolkit's `Get-SPAuthToken` flow. |
+| `-PermissionCheck` | Probe mode: matrix only, no data pulled. Run this first with a new token. |
+| `-IncludeEntitlements` | Pull ALL entitlements into JSON (can be huge). Default: count + 100-item sample. |
+| `-IncludeCsv` | Also write one CSV per section over the FULL data, plus findings.csv. |
+| `-EntitlementSampleSize <n>` | Sample size when not pulling all. Default 100. |
+| `-Top <n>` | Rows per section in the HTML tables (full data always in JSON). Default 50. |
+| `-MaxItemsPerSection <n>` | Safety cap per paged collection. Default 10000. |
+| `-OutputPath` / `-OutputMode` | Output dir (default `.\Audit\config-inventory`) and Console/HTML/JSON/All. |
+
+```powershell
+# 1. Verify token coverage
+.\Scripts\Invoke-SPConfigInventory.ps1 -PermissionCheck
+# 2. Full inventory
+.\Scripts\Invoke-SPConfigInventory.ps1
+# 3. Deep export including every entitlement
+.\Scripts\Invoke-SPConfigInventory.ps1 -IncludeEntitlements -MaxItemsPerSection 50000
+```
+
+**Read-only.** **Output:** `Config-Inventory-<timestamp>.html` + `.json` (and
+`Config-Inventory-PermissionCheck-<timestamp>.json` in probe mode).
 
 ### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an

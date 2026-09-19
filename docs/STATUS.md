@@ -1,9 +1,9 @@
 # SailPoint Governance Toolkit -- Status
 
-**Date:** 2026-08-22
+**Date:** 2026-08-22 (commit-status corrections 2026-09-07; validation-loop update 2026-09-06/07; change narrative lives in `CHANGES.md`)
 **Branch:** master (up to date with origin)
 **Commits since V7c initial build:** 29
-**Scripts:** 66 | **Tests:** 106 | **Parse errors:** 0 | **TODO/FIXME/HACK:** 0
+**Scripts:** 67 | **Test files:** 109 | **Suite:** 2,486 tests, 0 failures, 44 skipped (pwsh 7.6.5 / Pester 5.7.1) | **Parse errors:** 0
 
 ---
 
@@ -25,7 +25,7 @@
 | V6 | -- | TRANSFORM+REPORT | Stable | Read-only visualizer |
 | V7 | 2,234 | TRANSFORM+REPORT | Stable | Calendar-day visualizer (13 charts, suspect heuristic fix, accountability rebuild) |
 | V7c | 2,670 | TRANSFORM+REPORT | Stable | V7 + engagement heatmap + entitlement state summary (15 charts). Rebuilt on fixed V7 |
-| V8 | 1,408 | TRANSFORM+REPORT | Stable | State-powered, <30s render, -AutoFetch, 8 sections |
+| V8 | ~1,540 | TRANSFORM+REPORT | **Uncommitted edits** | State-powered, <30s render, -AutoFetch, 8 sections. +Decision Activity (daily transition trend, top revoked, source breakdown from stateLog); covered by SP.DailyEvidenceV8Decision.Tests (11) |
 
 ## State Tracking Modules (v2.1)
 
@@ -35,7 +35,7 @@
 | SP.ReviewerState | 718 | Committed | Read/Update/Write-SPReviewerState, C/P/M/U classification, weekly compliance |
 | SP.StateOrchestrator | 685+26 | **Uncommitted edits** | Invoke-SPStateTracking, Resolve-SPReportDateRange, Select-SPSeriesByCampaignName. +26 lines: incremental checkpointing |
 
-## B2B Governance (ALL UNCOMMITTED)
+## B2B Governance (committed 2026-08-23 in `a31f218`; see CHANGES.md for the full entry)
 
 | File | Lines | Purpose |
 |------|-------|---------|
@@ -54,8 +54,17 @@
 
 | Script | Lines | Status | Notes |
 |--------|-------|--------|-------|
-| Invoke-SPDecisionScrape.ps1 | 919 | **Uncommitted edits** | +170 lines: intra-report dupe detection, re-revoked grants, gap-fill |
-| Invoke-SPPendingReviewerScrape.ps1 | 810 | **Uncommitted edits** | +25 lines: chronic trend direction, trailing streak logic |
+| Invoke-SPDecisionScrape.ps1 | 919 | Committed (`a31f218`) | Intra-report dupe detection, re-revoked grants, gap-fill; validated live 2026-09-06 |
+| Invoke-SPPendingReviewerScrape.ps1 | 810 | Committed (`a31f218`) | Chronic trend direction, trailing streak logic; validated live 2026-09-06 |
+
+## Configuration Inventory (NEW 2026-09-06, uncommitted)
+
+| Item | Status |
+|------|--------|
+| Scripts/Invoke-SPConfigInventory.ps1 | Read-only ISC configuration documentation: 19 object types, HTML + JSON + optional CSVs, identity count |
+| -PermissionCheck probe | Per-endpoint tenant-truth permission matrix (200 / 403 + required level / 404) |
+| Governance Posture Findings | Severity-ranked assessment: unhealthy/ownerless sources, overdue ACTIVE campaigns, ownerless roles/APs, privileged+requestable entitlements, failing workflows, unenforced SoD, degraded VA clusters |
+| Tests/SP.ConfigInventory.Tests.ps1 | 13 integration tests vs Tests/Tools/mock-isc-inventory.js |
 
 ## SP.CampaignSeries
 
@@ -65,6 +74,28 @@
 | 6 exported functions | Get-SPCampaignSeriesKey, Group-SPCampaignSeries, Get-SPSeriesItemKey, Resolve-SPSeriesItemState, Get-SPSeriesAttestationDelta, Get-SPSeriesInstanceCompletion |
 
 ## Uncommitted Changes Summary
+
+**RESOLVED 2026-08-23:** everything below was committed in `a31f218` (22 files,
+6,025 insertions), followed by three playbook doc commits (`b276fd3`,
+`a32dc84`, `a8c41a6`). Original pre-commit inventory kept below for the record.
+
+**CURRENT uncommitted set (2026-09-06 validation loop -- full narrative in
+`CHANGES.md`, final gate 2,486 tests / 0 failures):**
+
+- NEW: `Scripts/Invoke-SPConfigInventory.ps1`, `Tests/SP.ConfigInventory.Tests.ps1`,
+  `Tests/SP.DailyEvidenceV8Decision.Tests.ps1`, `Tests/SP.DailyEvidenceV4gLive.Tests.ps1`,
+  `Tests/Tools/mock-isc-inventory.js`, `Tests/Tools/mock-isc-v4g.js`
+- `Scripts/Invoke-SPDailyEvidenceReportV8.ps1` -- Decision Activity sub-section
+  (stateLog-mined daily trend + rankings + source breakdown)
+- PID bug fix (`$pId` collides with read-only automatic `$PID`; degraded the
+  High-Risk Exposure KPI on every engine): `Modules/SP.Audit/SP.AuditAnalytics.psm1`,
+  `Scripts/Invoke-SPDailyEvidenceReport{,V2,V3,V4g}.ps1`
+- Cross-platform test fixes: `Tests/SP.CacheRobustness.Tests.ps1` (-Encoding Byte),
+  `Tests/SP.DailyEvidenceV7Reconcile.Tests.ps1` (engine autodetect),
+  `Tests/SP.ScheduledVaultSecret.Tests.ps1` (DPAPI skips on non-Windows)
+- Docs: `docs/playbook/cli-playbook.md`, `docs/playbook/07-reporting-analytics.md`,
+  both `USER-GUIDE.html` copies, `docs/toolkit-status.md` pointer, `docs/CHANGES.md`
+  + this file; `.gitignore` +`.pwsh/`
 
 **Modified (13 files, ~358 insertions):**
 - Config/settings.json -- B2B config block
@@ -98,10 +129,14 @@
 
 ## Next Steps / Open Items
 
-1. **Commit B2B work** -- 6 new files + 4 supporting modifications, all parse-clean
-2. **Commit scraper enhancements** -- dupe detection, re-revoked grants, chronic trend direction
-3. **Commit V4f campaign name filters** -- parity with V4b/V4g
-4. **Commit StateOrchestrator checkpointing** -- crash resilience for multi-hour runs
-5. **Playbook updates** -- V4f, V4g, V8 entries may need expansion; B2B section needed
+1. ~~Commit B2B work~~ -- DONE 2026-08-23 (`a31f218`)
+2. ~~Commit scraper enhancements~~ -- DONE 2026-08-23 (`a31f218`)
+3. ~~Commit V4f campaign name filters~~ -- DONE 2026-08-23 (`a31f218`)
+4. ~~Commit StateOrchestrator checkpointing~~ -- DONE 2026-08-23 (`a31f218`)
+5. ~~Playbook updates~~ -- DONE 2026-08-23 (`b276fd3`, `a32dc84`, `a8c41a6`)
 6. **Version bumps** -- all scripts still at 1.0.0 despite significant evolution
 7. **_local-wip/ cleanup** -- reference files incorporated into V7c; can be .gitignored
+8. **B2B Mac-side follow-ups** -- PS 5.1 Pester pass; PlantUML render of
+   `docs/designs/b2b-governance/01-b2b-group-naming-convention.puml`
+9. **Commit or document the post-a31f218 working tree** -- V4g/V8/V1-V3 edits,
+   SP.AuditAnalytics, Invoke-SPConfigInventory + tests, mock-isc tools

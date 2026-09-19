@@ -1,6 +1,11 @@
 # SailPoint Governance Toolkit -- Session Restart Context
 
-**Last Updated:** 2026-06-15
+> **NOTE:** the running change log lives at `docs/CHANGES.md` (newest first) and the
+> inventory-style state at `docs/STATUS.md` -- read those for everything after
+> 2026-06-15. This file is kept as architectural context; its status sections below
+> are historical.
+
+**Last Updated:** 2026-06-15 (superseded by docs/CHANGES.md + docs/STATUS.md)
 **Status:** SP.Shared modularization COMPLETE + SP.CacheService with JSONL persistence + Governance Trending Dashboard
 
 ---

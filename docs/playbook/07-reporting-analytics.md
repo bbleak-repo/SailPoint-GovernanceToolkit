@@ -45,6 +45,7 @@ anyone who needs to know "what report do I give to whom?"
 | Entitlement History | `Invoke-SPEntitlementHistory.ps1` | Governance analysis, compliance | On-demand | Multi-snapshot timeline showing how entitlement decisions evolved across campaigns | HTML |
 | Cache Validation (diagnostic) | `Invoke-SPCacheValidate.ps1` | IAM operations, troubleshooting | On-demand | SHA-256 integrity checks + schema validation of all toolkit cache files | Status bar summary (no report file) |
 | ISC Reconciliation | `Invoke-SPIscReconciliation.ps1` | Governance leads, auditors | On-demand | Discrepancy export comparing local governance data against ISC source-of-truth | HTML, JSON |
+| Configuration Inventory | `Invoke-SPConfigInventory.ps1` | Implementors, auditors, onboarding | On-demand / quarterly | Read-only inventory of the full ISC configuration (19 object types: sources, campaigns, roles, access profiles, entitlements, governance groups, SoD, workflows, VA clusters, ...) with a per-endpoint permission matrix AND a governance posture findings assessment (unhealthy sources, overdue campaigns, ownerless roles, privileged+requestable entitlements, unenforced SoD, ...); `-PermissionCheck` probe mode reports exactly what the token can read; `-IncludeCsv` for flat exports | HTML, JSON, CSV |
 
 ---
 
@@ -379,7 +380,7 @@ for fast, accurate reporting without ISC API calls. Target execution: <30 second
 |---|---|
 | **1. Entitlement State Summary** | KPI tiles: Approved / Revoked / Pending / Undecided with percentages |
 | **1b. Privileged Access Summary** | Privileged KPIs: total, approved, revoked, exposure (pending+undecided). Per-source breakdown (AD, AWS, ServiceNow, SAP) with decided % per source |
-| **2. Newly Decided** | Entitlements with PENDING/UNDECIDED -> decision transition in the date window. Includes the **Re-Approved After Revoke** sub-table: observed REVOKE -> APPROVE re-grants in the window, with the revocation day mined from each record's state log |
+| **2. Newly Decided** | Entitlements with PENDING/UNDECIDED -> decision transition in the date window. Includes the **Re-Approved After Revoke** sub-table (observed REVOKE -> APPROVE re-grants, revocation day mined from the state log) and **Decision Activity**: daily approval/revocation transition trend chart, raw daily table, top revoked entitlements/identities, and per-source breakdown -- the Decision Activity Tracker analytics computed from honest state transitions instead of scraped HTML |
 | **3. Chronically Unreviewed** | Items with consecutive undecided campaigns >= threshold (default 5) |
 | **4. Dropped from Scope** | Entitlements no longer in any active campaign |
 | **5. Reviewer Engagement Summary** | Engagement score table + KPI tiles |
