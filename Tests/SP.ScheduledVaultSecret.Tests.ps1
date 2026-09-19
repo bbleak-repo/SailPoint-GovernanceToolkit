@@ -21,9 +21,15 @@ BeforeAll {
     Import-SPTestModules -Core
 }
 
+# Discovery-time platform guard: DPAPI (ProtectedData.Protect) is Windows-only, and
+# ScheduledVault Dpapi mode is a Windows scheduled-task feature by design. SV-01/02/03
+# exercise the DPAPI path and are skipped on non-Windows; SV-04/05 (AclFile mode, no
+# DPAPI) run everywhere.
+$script:svIsWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+
 Describe "SV -- ScheduledVault per-install secret strengthens the machine-derived key" {
 
-    It "SV-01 Dpapi mode: DPAPI-protected, self-describing file that round-trips" {
+    It "SV-01 Dpapi mode: DPAPI-protected, self-describing file that round-trips" -Skip:(-not $script:svIsWindows) {
         $p  = Join-Path $TestDrive 'sv1.secret'
         $s1 = Get-SPScheduledVaultSecret -SecretPath $p -KeyProtection Dpapi
         Test-Path -LiteralPath $p | Should -BeTrue
@@ -60,7 +66,7 @@ Describe "SV -- ScheduledVault per-install secret strengthens the machine-derive
         (Get-SPScheduledVaultSecret -SecretPath $p -KeyProtection Dpapi) | Should -Be $s5
     }
 
-    It "SV-02 passphrase is 64-hex, stable for a given secret, and CHANGES with the secret" {
+    It "SV-02 passphrase is 64-hex, stable for a given secret, and CHANGES with the secret" -Skip:(-not $script:svIsWindows) {
         $pa  = Join-Path $TestDrive 'sva.secret'
         $pb  = Join-Path $TestDrive 'svb.secret'
         $ppa = Get-SPMachineDerivedPassphrase -SecretPath $pa
@@ -70,7 +76,7 @@ Describe "SV -- ScheduledVault per-install secret strengthens the machine-derive
         (Get-SPMachineDerivedPassphrase -SecretPath $pa) | Should -Be $ppa -Because 'same secret -> stable key'
     }
 
-    It "SV-03 the hardened key differs from the OLD public-only derivation" {
+    It "SV-03 the hardened key differs from the OLD public-only derivation" -Skip:(-not $script:svIsWindows) {
         $p        = Join-Path $TestDrive 'svc.secret'
         $hardened = Get-SPMachineDerivedPassphrase -SecretPath $p
 

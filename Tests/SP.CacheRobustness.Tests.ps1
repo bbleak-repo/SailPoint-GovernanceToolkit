@@ -86,7 +86,9 @@ Describe "CR-G10: Add-SPItemCacheLines mutex-guarded no-BOM append" {
         ($lines -join '|') | Should -Match 'a.*b.*c'
 
         # First three bytes must NOT be a UTF-8 BOM (0xEF 0xBB 0xBF).
-        $bytes = Get-Content -Path $file -Encoding Byte -TotalCount 3
+        # ReadAllBytes instead of Get-Content -Encoding Byte: the 'Byte' encoding
+        # name is Windows PowerShell 5.1-only and throws under pwsh 6+.
+        $bytes = [System.IO.File]::ReadAllBytes($file) | Select-Object -First 3
         ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -Be $false
     }
 }

@@ -25,7 +25,10 @@
     Report sections (8):
       1  Entitlement State Summary (KPI tiles)
       2  Newly Decided (state transitions in the date window) + Re-Approved After
-         Revoke sub-table (observed REVOKE -> APPROVE re-grants in the window)
+         Revoke sub-table (observed REVOKE -> APPROVE re-grants in the window) +
+         Decision Activity (daily approval/revocation transition trend chart, raw
+         daily table, top revoked entitlements/identities, per-source breakdown --
+         all mined from stateLog observed transitions, never auto-approve artifacts)
       3  Chronically Unreviewed (consecutiveUndecided >= threshold)
       4  Dropped from Scope (inCurrentScope == false)
       5  Reviewer Engagement Summary (score table + KPI tiles)
@@ -663,6 +666,54 @@ foreach ($sk in $entStateMap.Keys) {
 $reApprovedSorted = @($reApprovedList | Sort-Object { $_['ReApprovedDate'] } -Descending)
 Write-Host "    Re-approved:        $($reApprovedSorted.Count)" -ForegroundColor DarkGray
 
+# --- Section 2c: Decision Activity (observed transition events from stateLog) ---
+# Every record's stateLog is the full per-day observed state history
+# (e.g. P:20260901|R:20260904|A:20260906). A DECISION EVENT is an entry whose code
+# DIFFERS from the previous entry and lands on A (approval) or R (revocation) -- the
+# same observed-transition doctrine as Newly Decided, so idNowAutoApproved artifacts
+# (U entries) and first-seen-already-decided records never count. This gives V8 the
+# decision-activity analytics of Invoke-SPDecisionScrape, computed from honest state
+# instead of scraped HTML: daily trend, top revoked entitlements/identities, and a
+# per-source breakdown, all filtered to the report date window.
+$decisionEvents = [System.Collections.Generic.List[hashtable]]::new()
+foreach ($sk in $entStateMap.Keys) {
+    $rec = $entStateMap[$sk]
+    if (-not $rec.ContainsKey('stateLog')) { continue }
+    $entries = @(([string]$rec['stateLog']) -split '\|' | Where-Object { $_ -match '^[APRU]:\d{8}$' })
+    for ($ei = 1; $ei -lt $entries.Count; $ei++) {
+        $code = $entries[$ei].Substring(0, 1)
+        $prev = $entries[$ei - 1].Substring(0, 1)
+        if ($code -eq $prev) { continue }
+        if ($code -ne 'A' -and $code -ne 'R') { continue }
+        $d8 = $entries[$ei].Substring(2)
+        $day = $d8.Substring(0, 4) + '-' + $d8.Substring(4, 2) + '-' + $d8.Substring(6, 2)
+        if ($day -lt $filterStartDate -or $day -gt $filterEndDate) { continue }
+        $decisionEvents.Add(@{
+            Day = $day; Kind = $(if ($code -eq 'A') { 'APPROVE' } else { 'REVOKE' })
+            IdentityName = [string]$rec['identityName']; AccessName = [string]$rec['accessName']
+            SourceName = [string]$rec['sourceName']; ReviewerName = [string]$rec['reviewerName']
+        })
+    }
+}
+$daDays = @($decisionEvents | ForEach-Object { $_['Day'] } | Sort-Object -Unique)
+$daDailyA = @{}; $daDailyR = @{}
+foreach ($ev in $decisionEvents) {
+    if ($ev['Kind'] -eq 'APPROVE') { if (-not $daDailyA.ContainsKey($ev['Day'])) { $daDailyA[$ev['Day']] = 0 }; $daDailyA[$ev['Day']]++ }
+    else { if (-not $daDailyR.ContainsKey($ev['Day'])) { $daDailyR[$ev['Day']] = 0 }; $daDailyR[$ev['Day']]++ }
+}
+$daTopRevokedEnt = @($decisionEvents | Where-Object { $_['Kind'] -eq 'REVOKE' } | Group-Object { $_['AccessName'] } |
+    Sort-Object -Property @{Expression='Count';Descending=$true}, @{Expression='Name'} | Select-Object -First 10)
+$daTopRevokedId = @($decisionEvents | Where-Object { $_['Kind'] -eq 'REVOKE' } | Group-Object { $_['IdentityName'] } |
+    Sort-Object -Property @{Expression='Count';Descending=$true}, @{Expression='Name'} | Select-Object -First 10)
+$daBySource = @($decisionEvents | Group-Object { $_['SourceName'] } | ForEach-Object {
+    $a = @($_.Group | Where-Object { $_['Kind'] -eq 'APPROVE' }).Count
+    $r = @($_.Group | Where-Object { $_['Kind'] -eq 'REVOKE' }).Count
+    [pscustomobject]@{ Source = $_.Name; Approvals = $a; Revocations = $r }
+} | Sort-Object -Property @{Expression='Revocations';Descending=$true}, @{Expression='Source'})
+$daTotalA = @($decisionEvents | Where-Object { $_['Kind'] -eq 'APPROVE' }).Count
+$daTotalR = @($decisionEvents | Where-Object { $_['Kind'] -eq 'REVOKE' }).Count
+Write-Host "    Decision activity:  $daTotalA approval event(s), $daTotalR revocation event(s) across $($daDays.Count) day(s)" -ForegroundColor DarkGray
+
 # --- Section 3: Chronically unreviewed ---
 $chronicList = [System.Collections.Generic.List[hashtable]]::new()
 foreach ($sk in $entStateMap.Keys) {
@@ -1061,6 +1112,72 @@ else {
         [void]$sb.Append('</tr>')
     }
     [void]$sb.Append('</table>')
+}
+
+# Section 2c: Decision Activity -- daily observed-transition trend + rankings, the
+# Invoke-SPDecisionScrape analytics computed from honest state instead of scraped HTML.
+[void]$sb.Append("<div style='font-weight:600;font-size:13px;margin:14px 0 4px;color:#1f3a5f'>Decision Activity ($daTotalA approval / $daTotalR revocation event(s))</div>")
+if ($daDays.Count -eq 0) {
+    [void]$sb.Append("<p class='note'>No observed decision transitions between $filterStartDate and $filterEndDate.</p>")
+}
+else {
+    [void]$sb.Append("<p class='note'>Observed state transitions per day from the entitlement state log (green = approvals, red = revocations). Auto-approve artifacts and first-seen-already-decided records never count. Justification text is not tracked in state records -- the V4g Revoked register carries it.</p>")
+    # Paired-bar SVG (adaptive width; labels anchored at their top end below the axis)
+    $n = $daDays.Count
+    $barW = if ($n -le 20) { 12 } elseif ($n -le 45) { 8 } else { 5 }
+    $pairGap = 3; $groupGap = if ($n -le 20) { 10 } else { 5 }
+    $chartH = 120; $labelH = 60; $topPad = 14; $leftPad = 10
+    $step = [int][math]::Ceiling($n / 30.0)
+    $daMax = 1
+    foreach ($d in $daDays) {
+        $a = if ($daDailyA.ContainsKey($d)) { [int]$daDailyA[$d] } else { 0 }
+        $r = if ($daDailyR.ContainsKey($d)) { [int]$daDailyR[$d] } else { 0 }
+        if ($a -gt $daMax) { $daMax = $a }
+        if ($r -gt $daMax) { $daMax = $r }
+    }
+    $groupW = ($barW * 2) + $pairGap + $groupGap
+    $svgW = $leftPad + ($n * $groupW) + 20
+    $svgH = $topPad + $chartH + $labelH
+    [void]$sb.Append("<div style='overflow-x:auto'><svg width='$svgW' height='$svgH' xmlns='http://www.w3.org/2000/svg' font-family='Segoe UI,Arial,sans-serif' font-size='10'>")
+    for ($di = 0; $di -lt $n; $di++) {
+        $d = $daDays[$di]
+        $a = if ($daDailyA.ContainsKey($d)) { [int]$daDailyA[$d] } else { 0 }
+        $r = if ($daDailyR.ContainsKey($d)) { [int]$daDailyR[$d] } else { 0 }
+        $gx = $leftPad + ($di * $groupW)
+        $rh = [int]($chartH * ($r / $daMax)); $ry = $topPad + $chartH - $rh
+        $ah = [int]($chartH * ($a / $daMax)); $ay = $topPad + $chartH - $ah
+        [void]$sb.Append("<rect x='$gx' y='$ry' width='$barW' height='$rh' rx='2' fill='#CC3333'><title>$d revocations: $r</title></rect>")
+        [void]$sb.Append("<rect x='$($gx + $barW + $pairGap)' y='$ay' width='$barW' height='$ah' rx='2' fill='#339933'><title>$d approvals: $a</title></rect>")
+        if (($di % $step) -eq 0 -or $di -eq ($n - 1)) {
+            $lx = $gx + $barW; $ly = $topPad + $chartH + 12
+            [void]$sb.Append("<text x='$lx' y='$ly' text-anchor='end' transform='rotate(-60 $lx,$ly)' fill='#555'>$d</text>")
+        }
+    }
+    [void]$sb.Append('</svg></div>')
+    # Raw daily numbers
+    [void]$sb.Append('<table class="report"><tr><th>Day</th><th>Approvals</th><th>Revocations</th></tr>')
+    foreach ($d in $daDays) {
+        $a = if ($daDailyA.ContainsKey($d)) { [int]$daDailyA[$d] } else { 0 }
+        $r = if ($daDailyR.ContainsKey($d)) { [int]$daDailyR[$d] } else { 0 }
+        [void]$sb.Append("<tr><td>$d</td><td>$a</td><td>$r</td></tr>")
+    }
+    [void]$sb.Append('</table>')
+    if (@($daTopRevokedEnt).Count -gt 0) {
+        [void]$sb.Append("<div style='font-weight:600;font-size:12px;margin:10px 0 2px'>Top Revoked Entitlements / Identities (window)</div>")
+        [void]$sb.Append('<table class="report"><tr><th>Entitlement</th><th>Revocations</th><th></th><th>Identity</th><th>Revocations</th></tr>')
+        $rows = [math]::Max(@($daTopRevokedEnt).Count, @($daTopRevokedId).Count)
+        for ($ri = 0; $ri -lt $rows; $ri++) {
+            $e1 = if ($ri -lt @($daTopRevokedEnt).Count) { $daTopRevokedEnt[$ri] } else { $null }
+            $e2 = if ($ri -lt @($daTopRevokedId).Count) { $daTopRevokedId[$ri] } else { $null }
+            [void]$sb.Append('<tr><td>' + $(if ($e1) { ConvertTo-SPHtmlSafe $e1.Name } else { '' }) + '</td><td>' + $(if ($e1) { $e1.Count } else { '' }) + '</td><td></td><td>' + $(if ($e2) { ConvertTo-SPHtmlSafe $e2.Name } else { '' }) + '</td><td>' + $(if ($e2) { $e2.Count } else { '' }) + '</td></tr>')
+        }
+        [void]$sb.Append('</table>')
+        [void]$sb.Append('<table class="report"><tr><th>Source</th><th>Approvals</th><th>Revocations</th></tr>')
+        foreach ($srow in $daBySource) {
+            [void]$sb.Append('<tr><td>' + (ConvertTo-SPHtmlSafe $srow.Source) + "</td><td>$($srow.Approvals)</td><td>$($srow.Revocations)</td></tr>")
+        }
+        [void]$sb.Append('</table>')
+    }
 }
 [void]$sb.Append('</div>')
 

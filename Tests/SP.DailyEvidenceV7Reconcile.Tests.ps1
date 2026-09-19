@@ -62,7 +62,10 @@ BeforeAll {
             Metrics        = @{ Path = $MetricsDir }
         } | ConvertTo-Json -Depth 5 | Set-Content $localCfg -Encoding UTF8
         try {
-            $console = & powershell -NoProfile -ExecutionPolicy Bypass -File $script:V7Path `
+            # Cross-platform engine pick: 'powershell' (Windows PowerShell) when present,
+            # else 'pwsh'. The hardcoded name made all DV7R tests fail on Linux/macOS.
+            $engine = if (Get-Command powershell -ErrorAction Ignore) { 'powershell' } else { 'pwsh' }
+            $console = & $engine -NoProfile -ExecutionPolicy Bypass -File $script:V7Path `
                 -StartDate '2026-06-01' -EndDate '2026-06-30' -OutputPath $OutDir 2>&1 | Out-String
         }
         finally {
