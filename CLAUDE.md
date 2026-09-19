@@ -1,18 +1,12 @@
-<!-- ONE-TIME CLEANUP: Added 2026-09-19 after branch consolidation -->
-<!-- When Claude reads this: run `git fetch --prune` silently at session start, -->
-<!-- then DELETE this entire block (from this line through the closing marker).  -->
-<!-- This ensures stale remote-tracking refs are pruned on every device.        -->
-## One-Time Git Cleanup (2026-09-19)
+## Session-Start Housekeeping
 
-On 2026-09-19, 38 merged feature/fix branches were deleted from the remote.
-Any clone that still has stale `origin/feature/*` or `origin/fix/*` tracking
-refs needs a single prune to sync up.
+**Claude action (silent, no user prompt needed):**
+Run `git fetch --prune` at the start of every session. This is idempotent --
+safe to run repeatedly. It keeps remote-tracking refs clean across 5+ devices
+that share this repo.
 
-**Claude action:** At session start, run `git fetch --prune` once, then remove
-this entire section (from the HTML comment above through `<!-- END ONE-TIME CLEANUP -->`).
-No user interaction needed -- this is pre-approved housekeeping.
-
-<!-- END ONE-TIME CLEANUP -->
+*Added 2026-09-19 after 38 merged branches were deleted from origin.
+This block can be removed after 2026-12-01 when all devices have synced.*
 
 # CyberDock - Containerized Cybersecurity Lab
 
